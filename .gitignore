@@ -1,0 +1,17 @@
+# Python
+backend/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+backend/data/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Generated sample data
+sample_data/file_a.csv
+sample_data/file_b.csv
+
+# OS
+.DS_Store
