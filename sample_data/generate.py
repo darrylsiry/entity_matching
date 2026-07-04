@@ -55,6 +55,15 @@ COMPANIES = [
           address="1 Hooli Way", city="Palo Alto", postcode="94301", country="USA"),
      dict(name="Hooli", website="www.hooli.com", ein="",
           address="1 Hooli Way", city="Palo Alto", postcode="94301", country="US")),
+    # genuinely uncertain: similar name only, differing location -> lands in REVIEW
+    (dict(name="Aperture Science Laboratories", website="", ein="",
+          address="", city="Cambridge", postcode="", country="USA"),
+     dict(name="Aperture Science Innovators", website="", ein="",
+          address="", city="Boston", postcode="", country="US")),
+    (dict(name="Massive Dynamic Labs", website="", ein="",
+          address="", city="New York", postcode="", country="USA"),
+     dict(name="Massive Dynamic Ventures", website="", ein="",
+          address="", city="Boston", postcode="", country="US")),
 ]
 
 # B-only distractors that resemble nothing in A.
@@ -113,9 +122,8 @@ def main() -> None:
     _write(HERE / "file_b.csv", b_rows)
     _write(HERE / "file_dedupe.csv", DEDUPE_ROWS)
     expected = sum(1 for _, b in COMPANIES if b is not None)
-    # Dedupe expectation: Acme x3, Globex x2, Initech x2, Umbrella x2 -> 4 dup groups.
     print(f"Wrote file_a.csv ({len(a_rows)} rows), file_b.csv ({len(b_rows)} rows)")
-    print(f"Expected two-file matches: {expected}")
+    print(f"Expected two-file pairs: {expected} (7 confident matches + 2 for review)")
     print(f"Wrote file_dedupe.csv ({len(DEDUPE_ROWS)} rows) — expect 7 entities "
           f"(Acme×3, Globex×2, Initech×2, Umbrella×2, + 3 singletons)")
 

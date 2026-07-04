@@ -73,8 +73,22 @@ class MatchPair(BaseModel):
     stage: str
     rule: str
     match_class: str
+    # None = automatic; "confirmed"/"dismissed" = a user decision on a review pair.
+    decision: str | None = None
     record_a: dict
     record_b: dict
+
+
+class DecisionRequest(BaseModel):
+    idx_a: int
+    idx_b: int
+    # "pending" clears a prior decision (undo).
+    decision: Literal["confirmed", "dismissed", "pending"]
+
+
+class DecisionResponse(BaseModel):
+    session_id: str
+    counts: dict
 
 
 class ResultsResponse(BaseModel):

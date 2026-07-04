@@ -45,9 +45,12 @@ export interface MatchPair {
   stage: string
   rule: string
   match_class: string
+  decision: string | null
   record_a: Record<string, string>
   record_b: Record<string, string>
 }
+
+export type Decision = 'confirmed' | 'dismissed' | 'pending'
 
 export interface ResultsResponse {
   session_id: string
@@ -148,6 +151,21 @@ export async function getClusters(
   p.set('page', String(opts.page ?? 0))
   p.set('page_size', String(opts.pageSize ?? 25))
   return jsonOrThrow(await fetch(`/api/session/${sessionId}/clusters?${p}`))
+}
+
+export async function postDecision(
+  sessionId: string,
+  idxA: number,
+  idxB: number,
+  decision: Decision,
+): Promise<{ session_id: string; counts: Record<string, number> }> {
+  return jsonOrThrow(
+    await fetch(`/api/session/${sessionId}/decision`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ idx_a: idxA, idx_b: idxB, decision }),
+    }),
+  )
 }
 
 export function downloadUrl(sessionId: string): string {

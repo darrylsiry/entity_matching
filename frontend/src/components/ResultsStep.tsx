@@ -1,5 +1,12 @@
-import { useEffect, useState } from 'react'
-import { downloadUrl, getResults, type MatchPair, type ResultsResponse } from '../api'
+import { useCallback, useEffect, useState } from 'react'
+import {
+  downloadUrl,
+  getResults,
+  postDecision,
+  type Decision,
+  type MatchPair,
+  type ResultsResponse,
+} from '../api'
 
 interface Props {
   sessionId: string
@@ -8,19 +15,13 @@ interface Props {
 
 const PAGE_SIZE = 25
 const FILTERS = [
-  { key: 'pairs', label: 'All pairs' },
-  { key: 'match', label: 'Matches' },
-  { key: 'review', label: 'Review' },
-  { key: 'unique_a', label: 'Unique in A' },
-  { key: 'unique_b', label: 'Unique in B' },
+  { key: 'pairs', label: 'All pairs', count: 'pairs' },
+  { key: 'match', label: 'Matches', count: 'match' },
+  { key: 'review', label: 'Review', count: 'review' },
+  { key: 'dismissed', label: 'Dismissed', count: 'dismissed' },
+  { key: 'unique_a', label: 'Unique in A', count: 'unique_a' },
+  { key: 'unique_b', label: 'Unique in B', count: 'unique_b' },
 ]
-
-const CLASS_LABEL: Record<string, string> = {
-  match: 'match',
-  review: 'review',
-  unique_a: 'unique · A',
-  unique_b: 'unique · B',
-}
 
 export function ResultsStep({ sessionId, onReset }: Props) {
   const [data, setData] = useState<ResultsResponse | null>(null)
@@ -28,12 +29,33 @@ export function ResultsStep({ sessionId, onReset }: Props) {
   const [page, setPage] = useState(0)
   const [error, setError] = useState<string | null>(null)
 
+  const load = useCallback(
+    async (p = page) => {
+      setError(null)
+      try {
+        setData(await getResults(sessionId, { matchClass: filter, page: p, pageSize: PAGE_SIZE }))
+      } catch (e) {
+        setError((e as Error).message)
+      }
+    },
+    [sessionId, filter, page],
+  )
+
   useEffect(() => {
-    setError(null)
-    getResults(sessionId, { matchClass: filter, page, pageSize: PAGE_SIZE })
-      .then(setData)
-      .catch((e) => setError((e as Error).message))
-  }, [sessionId, filter, page])
+    load(page)
+  }, [load, page])
+
+  async function decide(p: MatchPair, decision: Decision) {
+    try {
+      await postDecision(sessionId, p.idx_a, p.idx_b, decision)
+      // The item usually leaves the current filter; step back a page if it emptied.
+      const remaining = (data?.pairs.length ?? 1) - 1
+      if (remaining === 0 && page > 0) setPage((x) => x - 1)
+      else await load(page)
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
 
   const c = data?.counts ?? {}
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 0
@@ -47,7 +69,14 @@ export function ResultsStep({ sessionId, onReset }: Props) {
         </a>
       </div>
 
-      {/* Reconciliation: every row of each file is accounted for. */}
+      {(c.review ?? 0) > 0 && (
+        <p className="muted small review-hint">
+          {c.review} pair{c.review === 1 ? '' : 's'} need review — open the{' '}
+          <strong>Review</strong> tab to confirm or dismiss each one. Confirmed matches
+          are included in the downloaded dataset.
+        </p>
+      )}
+
       <div className="reconcile">
         <ReconcileRow
           title="File A"
@@ -79,7 +108,7 @@ export function ResultsStep({ sessionId, onReset }: Props) {
             }}
           >
             {f.label}
-            {countFor(c, f.key) !== undefined && <span className="tab-count">{countFor(c, f.key)}</span>}
+            <span className="tab-count">{c[f.count] ?? 0}</span>
           </button>
         ))}
       </div>
@@ -89,7 +118,7 @@ export function ResultsStep({ sessionId, onReset }: Props) {
 
       <div className="pair-list">
         {data?.pairs.map((p, i) => (
-          <PairCard key={`${p.idx_a}-${p.idx_b}-${i}`} pair={p} />
+          <PairCard key={`${p.idx_a}-${p.idx_b}-${i}`} pair={p} onDecide={decide} />
         ))}
       </div>
 
@@ -121,9 +150,81 @@ export function ResultsStep({ sessionId, onReset }: Props) {
   )
 }
 
-function countFor(c: Record<string, number>, key: string): number | undefined {
-  if (key === 'pairs') return c.pairs
-  return c[key]
+function PairCard({
+  pair,
+  onDecide,
+}: {
+  pair: MatchPair
+  onDecide: (p: MatchPair, d: Decision) => void
+}) {
+  const hasA = Object.keys(pair.record_a).length > 0
+  const hasB = Object.keys(pair.record_b).length > 0
+  const twoSided = hasA && hasB
+  const keys = Array.from(new Set([...Object.keys(pair.record_a), ...Object.keys(pair.record_b)]))
+  const cls = pair.match_class
+  const isReview = cls === 'review'
+  const isDismissed = cls === 'dismissed'
+  const isConfirmed = cls === 'match' && pair.decision === 'confirmed'
+
+  return (
+    <div className={`pair-card ${cls}`}>
+      <div className="pair-meta">
+        <span className={`badge ${cls}`}>{LABEL[cls] ?? cls}</span>
+        {isConfirmed && <span className="badge confirmed">✓ confirmed</span>}
+        {twoSided && <span className="score">{(pair.score * 100).toFixed(0)}%</span>}
+        {pair.stage && <span className="stage-tag">{pair.stage}</span>}
+
+        <span className="pair-actions">
+          {isReview && (
+            <>
+              <button className="btn btn-sm btn-confirm" onClick={() => onDecide(pair, 'confirmed')}>
+                ✓ Confirm match
+              </button>
+              <button className="btn btn-sm btn-dismiss" onClick={() => onDecide(pair, 'dismissed')}>
+                ✕ Dismiss
+              </button>
+            </>
+          )}
+          {(isConfirmed || isDismissed) && (
+            <button className="btn btn-sm btn-ghost" onClick={() => onDecide(pair, 'pending')}>
+              ↺ Undo
+            </button>
+          )}
+        </span>
+      </div>
+      <table className="pair-table">
+        <thead>
+          <tr>
+            <th>Field</th>
+            <th>File A</th>
+            <th>File B</th>
+          </tr>
+        </thead>
+        <tbody>
+          {keys.map((k) => {
+            const a = pair.record_a[k] ?? ''
+            const b = pair.record_b[k] ?? ''
+            const diff = twoSided && a.trim().toLowerCase() !== b.trim().toLowerCase()
+            return (
+              <tr key={k} className={diff ? 'diff' : ''}>
+                <td className="k">{k}</td>
+                <td>{hasA ? a : <span className="muted">—</span>}</td>
+                <td>{hasB ? b : <span className="muted">—</span>}</td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+const LABEL: Record<string, string> = {
+  match: 'match',
+  review: 'review',
+  dismissed: 'dismissed',
+  unique_a: 'unique · A',
+  unique_b: 'unique · B',
 }
 
 interface Segment {
@@ -156,47 +257,6 @@ function ReconcileRow({ title, total, segments }: { title: string; total?: numbe
           </span>
         ))}
       </div>
-    </div>
-  )
-}
-
-function PairCard({ pair }: { pair: MatchPair }) {
-  const hasA = Object.keys(pair.record_a).length > 0
-  const hasB = Object.keys(pair.record_b).length > 0
-  const twoSided = hasA && hasB
-  const keys = Array.from(new Set([...Object.keys(pair.record_a), ...Object.keys(pair.record_b)]))
-  const cls = pair.match_class
-
-  return (
-    <div className={`pair-card ${cls}`}>
-      <div className="pair-meta">
-        <span className={`badge ${cls}`}>{CLASS_LABEL[cls] ?? cls}</span>
-        {twoSided && <span className="score">{(pair.score * 100).toFixed(0)}%</span>}
-        {pair.stage && <span className="stage-tag">{pair.stage}</span>}
-      </div>
-      <table className="pair-table">
-        <thead>
-          <tr>
-            <th>Field</th>
-            <th>File A</th>
-            <th>File B</th>
-          </tr>
-        </thead>
-        <tbody>
-          {keys.map((k) => {
-            const a = pair.record_a[k] ?? ''
-            const b = pair.record_b[k] ?? ''
-            const diff = twoSided && a.trim().toLowerCase() !== b.trim().toLowerCase()
-            return (
-              <tr key={k} className={diff ? 'diff' : ''}>
-                <td className="k">{k}</td>
-                <td>{hasA ? a : <span className="muted">—</span>}</td>
-                <td>{hasB ? b : <span className="muted">—</span>}</td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
     </div>
   )
 }

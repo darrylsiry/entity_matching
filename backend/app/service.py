@@ -75,9 +75,13 @@ def enrich_pairs(
     raw_a = storage.load_upload(req.file_id_a)
     raw_b = storage.load_upload(req.file_id_b)
 
+    has_decision = "decision" in pairs.columns
     out = []
     for _, row in pairs.iterrows():
         ia, ib = int(row["idx_a"]), int(row["idx_b"])
+        decision = row["decision"] if has_decision else None
+        if decision is not None and pd.isna(decision):
+            decision = None
         out.append(
             {
                 "idx_a": ia,
@@ -86,6 +90,7 @@ def enrich_pairs(
                 "stage": row["stage"],
                 "rule": row["rule"],
                 "match_class": row["match_class"],
+                "decision": decision,
                 "record_a": _record(raw_a, ia),
                 "record_b": _record(raw_b, ib),
             }

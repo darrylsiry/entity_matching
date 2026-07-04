@@ -4,6 +4,8 @@ Find identical company entities two ways:
 
 - **Compare two files** (linkage) — match records in file A against file B. Output:
   matched pairs, with unmatched records flagged so counts reconcile per file.
+  Uncertain pairs land in a **review queue** where you **confirm** each as a match
+  (folded into the final dataset) or **dismiss** it (records revert to unmatched).
 - **Deduplicate one file** — cluster duplicate rows within a single file and give each
   row a **master ID** (rows sharing an ID are the same company). Key fields are
   auto-detected (a collapsible "Detected fields" panel on the Configure step lets you
@@ -36,6 +38,7 @@ only compared when they share a signal (a name-token prefix, a postcode, a domai
 backend/            FastAPI app + matching pipeline (Python)
   app/matching/     normalize, deterministic, probabilistic, fuzzy, scoring,
                     pipeline (two-file), cluster + dedupe (single-file)
+  app/review.py     confirm/dismiss decisions overlaid on results (two-file)
   app/api/routes.py HTTP endpoints
   tests/            pytest unit tests
 frontend/           Vite + React + TypeScript wizard UI
@@ -104,9 +107,10 @@ cd backend && .venv/bin/pytest -q
 | POST | `/api/session` | Create a session: `mode` (`link`\|`dedupe`) + file(s) + mappings + config |
 | POST | `/api/session/{id}/run` | Start matching (async background job) |
 | GET | `/api/session/{id}/status` | Poll `{state, stage, progress, counts}` |
-| GET | `/api/session/{id}/results` | *link mode:* paginated match pairs (`?match_class=&page=`) |
+| GET | `/api/session/{id}/results` | *link mode:* paginated pairs (`?match_class=pairs\|match\|review\|dismissed\|unique_a\|unique_b`) |
+| POST | `/api/session/{id}/decision` | *link mode:* confirm/dismiss/undo a review pair (`{idx_a, idx_b, decision}`) |
 | GET | `/api/session/{id}/clusters` | *dedupe mode:* master-ID clusters (`?filter=&page=`) |
-| GET | `/api/session/{id}/download` | Results as CSV (matched pairs, or original file + `master_id`) |
+| GET | `/api/session/{id}/download` | Results as CSV (matched pairs incl. confirmed reviews, or original file + `master_id`) |
 
 ## Notes / next steps
 

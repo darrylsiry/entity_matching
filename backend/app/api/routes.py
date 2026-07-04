@@ -8,16 +8,18 @@ import pandas as pd
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 
-from .. import service, storage
+from .. import review, service, storage
 from ..jobs import JobState, registry
 from ..matching.schema import FIELD_SPECS
-from ..matching.scoring import MATCH, REVIEW, UNIQUE_A, UNIQUE_B
+from ..matching.scoring import MATCH, REVIEW
 from ..models import (
     ClusterOut,
     ClustersResponse,
     ColumnInfo,
     CreateSessionRequest,
     CreateSessionResponse,
+    DecisionRequest,
+    DecisionResponse,
     FieldSpecOut,
     MatchPair,
     ResultsResponse,
@@ -142,23 +144,27 @@ def _status(session_id: str) -> StatusResponse:
 def get_results(
     session_id: str,
     match_class: str | None = Query(
-        None, description="filter: pairs|match|review|unique_a|unique_b"
+        None, description="filter: pairs|match|review|dismissed|unique_a|unique_b"
     ),
     page: int = Query(0, ge=0),
     page_size: int = Query(50, ge=1, le=500),
 ) -> ResultsResponse:
     try:
-        full = storage.load_result(session_id)
+        eff = review.effective_frame(session_id)
     except FileNotFoundError as exc:
         raise HTTPException(404, "no results yet") from exc
 
-    pairs = full
-    if match_class == "pairs":
-        pairs = full[full["match_class"].isin([MATCH, REVIEW])]
+    # "dismissed" is an audit view sourced from the base frame, not the effective one.
+    if match_class == "dismissed":
+        pairs = review.dismissed_frame(session_id)
+    elif match_class == "pairs":
+        pairs = eff[eff["match_class"].isin([MATCH, REVIEW])]
     elif match_class:
-        pairs = full[full["match_class"] == match_class]
+        pairs = eff[eff["match_class"] == match_class]
+    else:
+        pairs = eff
 
-    counts = _summary_counts(full)
+    counts = review.effective_counts(session_id)
     total = int(len(pairs))
     start = page * page_size
     page_pairs = pairs.iloc[start : start + page_size]
@@ -170,29 +176,18 @@ def get_results(
     )
 
 
-def _summary_counts(full: pd.DataFrame) -> dict:
-    """Reconciling counts derived from the stored result frame.
-
-    For each file: matched + review + unique == total rows.
-    """
-    vc = full["match_class"].value_counts().to_dict() if not full.empty else {}
-    match = int(vc.get(MATCH, 0))
-    review = int(vc.get(REVIEW, 0))
-    unique_a = int(vc.get(UNIQUE_A, 0))
-    unique_b = int(vc.get(UNIQUE_B, 0))
-    pair_rows = full[full["match_class"].isin([MATCH, REVIEW])] if not full.empty else full
-    matched_b = int(pair_rows["idx_b"].nunique()) if not pair_rows.empty else 0
-    return {
-        "records_a": match + review + unique_a,
-        "records_b": matched_b + unique_b,
-        "match": match,
-        "review": review,
-        "matched_b": matched_b,
-        "unique_a": unique_a,
-        "unique_b": unique_b,
-        "pairs": match + review,
-        "total": int(len(full)),
-    }
+@router.post("/session/{session_id}/decision", response_model=DecisionResponse)
+def decide(session_id: str, req: DecisionRequest) -> DecisionResponse:
+    """Confirm, dismiss, or clear a decision on a review pair."""
+    try:
+        review.set_decision(session_id, req.idx_a, req.idx_b, req.decision)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "no results yet") from exc
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return DecisionResponse(
+        session_id=session_id, counts=review.effective_counts(session_id)
+    )
 
 
 def _session_mode(session_id: str) -> str:
@@ -262,20 +257,19 @@ def _dedupe_counts(rows: pd.DataFrame) -> dict:
 
 @router.get("/session/{session_id}/download")
 def download(session_id: str) -> StreamingResponse:
-    try:
-        result = storage.load_result(session_id)
-    except FileNotFoundError as exc:
-        raise HTTPException(404, "no results yet") from exc
+    if not storage.result_exists(session_id):
+        raise HTTPException(404, "no results yet")
 
     if _session_mode(session_id) == "dedupe":
-        out = service.dedupe_download_frame(session_id, result)
+        out = service.dedupe_download_frame(session_id, storage.load_result(session_id))
         filename = f"deduplicated_{session_id}.csv"
     else:
+        # Effective frame -> confirmed reviews export as matches, dismissed as unique.
         rows = []
-        for p in service.enrich_pairs(session_id, result):
+        for p in service.enrich_pairs(session_id, review.effective_frame(session_id)):
             row = {
                 "score": p["score"], "match_class": p["match_class"],
-                "stage": p["stage"], "rule": p["rule"],
+                "decision": p["decision"] or "", "stage": p["stage"], "rule": p["rule"],
             }
             row.update({f"a_{k}": v for k, v in p["record_a"].items()})
             row.update({f"b_{k}": v for k, v in p["record_b"].items()})

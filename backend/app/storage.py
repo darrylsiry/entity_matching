@@ -86,3 +86,16 @@ def load_result(session_id: str) -> pd.DataFrame:
 
 def result_exists(session_id: str) -> bool:
     return (SESSION_DIR / f"{session_id}_results.parquet").exists()
+
+
+# ---- review decisions (small overlay, kept out of the big result parquet) ---
+
+def load_decisions(session_id: str) -> dict:
+    path = SESSION_DIR / f"{session_id}_decisions.json"
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text())
+
+
+def save_decisions(session_id: str, decisions: dict) -> None:
+    (SESSION_DIR / f"{session_id}_decisions.json").write_text(json.dumps(decisions))

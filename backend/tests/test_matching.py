@@ -178,3 +178,55 @@ def test_dedupe_clusters_duplicates():
     assert c["duplicate_rows"] == 4
     assert c["duplicate_clusters"] == 2
     assert c["unique_rows"] == 1
+
+
+# ---- review decisions (confirm / dismiss) ----------------------------------
+
+def test_review_confirm_and_dismiss(monkeypatch):
+    import app.storage as storage
+    from app import review
+
+    base = pd.DataFrame([
+        {"idx_a": 0, "idx_b": 0, "score": 0.99, "stage": "deterministic", "rule": "r", "match_class": "match"},
+        {"idx_a": 1, "idx_b": 1, "score": 0.80, "stage": "fuzzy", "rule": "r", "match_class": "review"},
+        {"idx_a": 2, "idx_b": 2, "score": 0.78, "stage": "fuzzy", "rule": "r", "match_class": "review"},
+        {"idx_a": 3, "idx_b": -1, "score": 0.0, "stage": "", "rule": "", "match_class": "unique_a"},
+        {"idx_a": -1, "idx_b": 3, "score": 0.0, "stage": "", "rule": "", "match_class": "unique_b"},
+    ])
+    store = {"s": base}
+    decs: dict = {}
+    monkeypatch.setattr(storage, "load_result", lambda sid: store[sid])
+    monkeypatch.setattr(storage, "load_decisions", lambda sid: decs.get(sid, {}))
+    monkeypatch.setattr(storage, "save_decisions", lambda sid, d: decs.__setitem__(sid, d))
+
+    sid = "s"
+    c = review.effective_counts(sid)
+    assert c["match"] == 1 and c["review"] == 2
+    assert c["records_a"] == 4 and c["records_b"] == 4
+
+    # confirm one review -> becomes a match
+    review.set_decision(sid, 1, 1, "confirmed")
+    c = review.effective_counts(sid)
+    assert c["match"] == 2 and c["review"] == 1 and c["confirmed"] == 1
+
+    # dismiss the other -> its records fall back to unique
+    review.set_decision(sid, 2, 2, "dismissed")
+    c = review.effective_counts(sid)
+    assert c["match"] == 2 and c["review"] == 0 and c["dismissed"] == 1
+    eff = review.effective_frame(sid)
+    assert 2 in set(eff.loc[eff["match_class"] == "unique_a", "idx_a"])
+    assert 2 in set(eff.loc[eff["match_class"] == "unique_b", "idx_b"])
+    # reconciliation holds after decisions
+    assert c["match"] + c["review"] + c["unique_a"] == c["records_a"]
+    assert c["matched_b"] + c["unique_b"] == c["records_b"]
+
+    # dismissed audit view + undo
+    assert len(review.dismissed_frame(sid)) == 1
+    review.set_decision(sid, 2, 2, "pending")
+    c = review.effective_counts(sid)
+    assert c["review"] == 1 and c["dismissed"] == 0
+
+    # invalid pair rejected
+    import pytest
+    with pytest.raises(KeyError):
+        review.set_decision(sid, 0, 0, "confirmed")  # 0,0 is an auto match, not review

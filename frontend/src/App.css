@@ -495,6 +495,51 @@ select {
   background: rgba(99, 102, 241, 0.18);
   color: #a5a8f5;
 }
+.badge.dismissed {
+  background: rgba(154, 160, 184, 0.18);
+  color: var(--muted);
+  text-decoration: line-through;
+}
+.badge.confirmed {
+  background: rgba(34, 197, 94, 0.15);
+  color: var(--match);
+}
+.pair-card.dismissed {
+  border-left-color: var(--muted);
+  opacity: 0.75;
+}
+
+/* review actions on a pair card */
+.pair-actions {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 8px;
+}
+.btn-confirm {
+  background: rgba(34, 197, 94, 0.15);
+  border-color: rgba(34, 197, 94, 0.4);
+  color: var(--match);
+}
+.btn-confirm:hover {
+  background: rgba(34, 197, 94, 0.25);
+}
+.btn-dismiss {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.35);
+  color: #f87171;
+}
+.btn-dismiss:hover {
+  background: rgba(239, 68, 68, 0.22);
+}
+.review-hint {
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+.pair-meta .stage-tag {
+  margin-left: 0;
+}
 .pair-card.unique_a,
 .pair-card.unique_b {
   border-left-color: var(--muted);
