@@ -15,10 +15,13 @@ function DropZone({
   label,
   upload,
   onUpload,
+  testFile,
 }: {
   label: string
   upload: UploadResponse | null
   onUpload: (u: UploadResponse) => void
+  // Optional bundled sample file (served from the app root) offered as a quick link.
+  testFile?: string
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -33,6 +36,18 @@ function DropZone({
       setError((e as Error).message)
     } finally {
       setBusy(false)
+    }
+  }
+
+  // Fetch the bundled sample CSV and load it into this dropzone as if uploaded.
+  async function loadTest(name: string) {
+    setError(null)
+    try {
+      const res = await fetch(`/${name}`)
+      if (!res.ok) throw new Error(`could not load ${name}`)
+      await handle(new File([await res.blob()], name, { type: 'text/csv' }))
+    } catch (e) {
+      setError((e as Error).message)
     }
   }
 
@@ -58,6 +73,20 @@ function DropZone({
           onChange={(e) => handle(e.target.files?.[0])}
         />
       </label>
+      {testFile && (
+        <a
+          className="test-link"
+          href={`/${testFile}`}
+          download={testFile}
+          title={`Load ${testFile}`}
+          onClick={(e) => {
+            e.preventDefault()
+            loadTest(testFile)
+          }}
+        >
+          test data
+        </a>
+      )}
       {error && <div className="error">{error}</div>}
     </div>
   )
@@ -76,8 +105,20 @@ export function UploadStep({ mode, uploadA, uploadB, onA, onB, onBack, onNext }:
           : 'One company per row in each file. We’ll match records in file A against file B.'}
       </p>
       <div className={dedupe ? 'upload-grid single' : 'upload-grid'}>
-        <DropZone label={dedupe ? 'File' : 'File A'} upload={uploadA} onUpload={onA} />
-        {!dedupe && <DropZone label="File B" upload={uploadB} onUpload={onB} />}
+        <DropZone
+          label={dedupe ? 'File' : 'File A'}
+          upload={uploadA}
+          onUpload={onA}
+          testFile={dedupe ? undefined : 'companies_file_a.csv'}
+        />
+        {!dedupe && (
+          <DropZone
+            label="File B"
+            upload={uploadB}
+            onUpload={onB}
+            testFile="companies_file_b.csv"
+          />
+        )}
       </div>
       <div className="actions">
         <button className="btn btn-ghost" onClick={onBack}>

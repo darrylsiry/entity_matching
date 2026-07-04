@@ -255,6 +255,17 @@
   color: var(--muted);
   font-size: 13px;
 }
+.test-link {
+  display: block;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.test-link:hover {
+  color: var(--primary);
+}
 
 /* column mapping */
 .map-grid {

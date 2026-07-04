@@ -23,14 +23,31 @@ stages consider.
 
 | Stage | Technique | Library | Signal |
 |-------|-----------|---------|--------|
-| 0 · Normalize | Strip legal suffixes (Inc/LLC/Ltd/GmbH), fold unicode, extract domains from URLs/emails, canonicalize IDs | `cleanco`, `tldextract`, `unidecode` | — |
+| 0 · Normalize | Strip legal suffixes (Inc/LLC/Ltd/GmbH), fold unicode, extract domains from URLs/emails, canonicalize IDs; **drop weak signals** (generic domains like gmail/linkedin, placeholder/short IDs) | `cleanco`, `tldextract`, `unidecode` | — |
 | 1 · Deterministic | Exact match on registration/tax ID, then website domain | pandas | Near-certain |
-| 2 · Probabilistic | Fellegi–Sunter linkage with **blocking** + fuzzy field comparisons (Jaro-Winkler name, exact domain, Levenshtein address, exact postcode) | **Splink** (DuckDB) | Scored 0–1 |
-| 3 · Fuzzy fallback | Blocked token-set name similarity for leftovers | `rapidfuzz` | Scored 0–1 |
+| 2 · Probabilistic | Fellegi–Sunter linkage with **blocking** (empty values excluded) + field comparisons (Jaro-Winkler name, exact domain, Levenshtein address, exact postcode) | **Splink** (DuckDB) | Scored 0–1 |
+| 3 · Fuzzy fallback | Length-aware name similarity `min(token_sort, token_set)` + address corroboration / conflict penalty | `rapidfuzz` | Scored 0–1 |
 | 4 · Resolve | Two-file: best match per record → **Match / Review / No-match**. One-file: union all links → **connected components → master ID** per row | pandas | — |
 
 **Blocking** is what makes 100k×100k tractable: instead of 10¹⁰ comparisons, records are
 only compared when they share a signal (a name-token prefix, a postcode, a domain).
+
+The exact ordering, tools, and every threshold/parameter are documented in plain
+English in **[MATCHING_WORKFLOW.txt](MATCHING_WORKFLOW.txt)**. For how the app is wired
+together (backend/frontend/Docker), see **[ARCHITECTURE.txt](ARCHITECTURE.txt)**.
+
+### Accuracy
+
+The matcher is tuned to keep false positives out of the auto-**Match** band and push
+genuinely uncertain pairs to **Review**. Measured on the bundled 1,000×1,000 test set
+against `ground_truth_matches.csv` (200 true pairs):
+
+| | Precision | Recall | F1 | False positives |
+|---|---|---|---|---|
+| Auto-matches | **1.00** | 0.99 | **0.995** | **0** |
+
+When `ground_truth_matches.csv` is present and the uploaded data corresponds to it, the
+Results screen shows a live precision/recall box (developer aid; ignored otherwise).
 
 ## Project layout
 
@@ -39,10 +56,14 @@ backend/            FastAPI app + matching pipeline (Python)
   app/matching/     normalize, deterministic, probabilistic, fuzzy, scoring,
                     pipeline (two-file), cluster + dedupe (single-file)
   app/review.py     confirm/dismiss decisions overlaid on results (two-file)
+  app/evaluation.py precision/recall vs ground truth (developer aid)
   app/api/routes.py HTTP endpoints
   tests/            pytest unit tests
 frontend/           Vite + React + TypeScript wizard UI
+  public/           bundled sample CSVs offered as "test data" links on upload
 sample_data/        generator: two files with overlaps + one file with duplicates
+companies_file_a.csv / _b.csv, ground_truth_matches.csv   realistic 1k-row test set
+MATCHING_WORKFLOW.txt / ARCHITECTURE.txt / DEPLOY.md      plain-English docs
 ```
 
 ## Prerequisites
@@ -67,17 +88,22 @@ make install
 make dev          # or: ./dev.sh
 ```
 
-Then open <http://localhost:5173> and use the 5-step wizard: **Upload → Map columns →
-Configure → Run → Results** (with CSV export). The Vite dev server proxies `/api` to the
-backend on `:8000`, and the backend runs with `--reload` so code edits restart it
-automatically.
+Then open <http://localhost:5173> and use the wizard: **Choose mode → Upload → Map
+columns → Configure → Run → Results** (dedupe mode skips *Map columns*). The Vite dev
+server proxies `/api` to the backend on `:8000`, and the backend runs with `--reload`
+so code edits restart it automatically.
 
 Prefer separate terminals? `make backend` and `make frontend` run each side alone.
 
-**Demo data** — deliberate name/format/ID variations:
+**Fastest way to try it:** on the Upload step, click the small **"test data"** link
+under each *Choose file* button — it loads the bundled `companies_file_a.csv` /
+`companies_file_b.csv` (1,000 rows each) straight into the uploader, so you can go
+Upload → Run in a couple of clicks.
+
+**Demo data** — small, hand-crafted files with deliberate name/format/ID variations:
 
 ```bash
-make sample       # -> file_a.csv + file_b.csv (7 matches), file_dedupe.csv (12 rows → 7 entities)
+make sample       # -> file_a.csv + file_b.csv (7 matches + 2 to review), file_dedupe.csv (12 rows → 7 entities)
 ```
 
 For two-file mode, upload `file_a.csv` + `file_b.csv` and accept the auto-guessed
@@ -103,6 +129,7 @@ cd backend && .venv/bin/pytest -q
 
 | Method | Path | Purpose |
 |--------|------|---------|
+| GET | `/api/fields` | Canonical fields to map columns onto |
 | POST | `/api/upload` | Upload a CSV/XLSX; returns `file_id` + detected columns |
 | POST | `/api/session` | Create a session: `mode` (`link`\|`dedupe`) + file(s) + mappings + config |
 | POST | `/api/session/{id}/run` | Start matching (async background job) |
@@ -110,6 +137,7 @@ cd backend && .venv/bin/pytest -q
 | GET | `/api/session/{id}/results` | *link mode:* paginated pairs (`?match_class=pairs\|match\|review\|dismissed\|unique_a\|unique_b`) |
 | POST | `/api/session/{id}/decision` | *link mode:* confirm/dismiss/undo a review pair (`{idx_a, idx_b, decision}`) |
 | GET | `/api/session/{id}/clusters` | *dedupe mode:* master-ID clusters (`?filter=&page=`) |
+| GET | `/api/session/{id}/evaluation` | *debug:* precision/recall vs ground truth, when present |
 | GET | `/api/session/{id}/download` | Results as CSV (matched pairs incl. confirmed reviews, or original file + `master_id`) |
 
 ## Notes / next steps
