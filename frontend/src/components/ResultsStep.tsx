@@ -171,8 +171,14 @@ function PairCard({
       <div className="pair-meta">
         <span className={`badge ${cls}`}>{LABEL[cls] ?? cls}</span>
         {isConfirmed && <span className="badge confirmed">✓ confirmed</span>}
-        {twoSided && <span className="score">{(pair.score * 100).toFixed(0)}%</span>}
-        {pair.stage && <span className="stage-tag">{pair.stage}</span>}
+        {twoSided && (() => {
+          const r = matchReason(pair)
+          return (
+            <span className="reason" title={r.detail}>
+              <span className="reason-icon">{r.icon}</span> {r.label}
+            </span>
+          )
+        })()}
 
         <span className="pair-actions">
           {isReview && (
@@ -225,6 +231,51 @@ const LABEL: Record<string, string> = {
   dismissed: 'dismissed',
   unique_a: 'unique · A',
   unique_b: 'unique · B',
+}
+
+// A human-readable explanation of why the cascade linked a pair, derived from the
+// stage/rule that produced it (plus the score for the fuzzy/probabilistic stages).
+function matchReason(pair: MatchPair): { icon: string; label: string; detail: string } {
+  const pct = Math.round(pair.score * 100)
+  const confirmed = pair.decision === 'confirmed'
+  const base = (() => {
+    switch (pair.rule) {
+      case 'registration_id':
+        return {
+          icon: '🔑',
+          label: 'Exact registration / tax ID',
+          detail: 'Both records share the same registration or tax identifier after normalization — a near-certain match.',
+        }
+      case 'domain':
+        return {
+          icon: '🌐',
+          label: 'Same website domain',
+          detail: 'Both records resolve to the same web domain after stripping www/paths — a near-certain match.',
+        }
+      case 'splink':
+        return {
+          icon: '◈',
+          label: `Probabilistic field match · ${pct}%`,
+          detail: `Splink's probabilistic model scored agreement across name, address and other fields at ${pct}% match probability.`,
+        }
+      case 'name_token_set':
+        return {
+          icon: '≈',
+          label: `Similar company name · ${pct}%`,
+          detail: `Company names are ${pct}% similar after normalization (legal suffixes stripped, tokens compared order-independently)${pct < 100 ? '; location agreement may have boosted the score' : ''}.`,
+        }
+      default:
+        return { icon: '•', label: pair.stage || 'matched', detail: '' }
+    }
+  })()
+  if (confirmed) {
+    return {
+      ...base,
+      label: `${base.label} · you confirmed`,
+      detail: `${base.detail} You manually confirmed this pair as a match.`,
+    }
+  }
+  return base
 }
 
 interface Segment {
