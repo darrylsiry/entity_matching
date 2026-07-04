@@ -98,14 +98,22 @@ def _run(frames, aliases, link_type, has_signal, threshold, orient) -> pd.DataFr
         return _empty_pairs()
 
     try:
-        # Only block on / compare columns that carry signal.
+        # Block only on columns that carry signal. Critically, wrap each key in
+        # NULLIF(col, '') so *empty* values don't join: block_on generates
+        # `l.col = r.col`, and since NULL != NULL in SQL, all the blank-value rows
+        # (e.g. the ~80% with no website) are NOT lumped into one giant candidate
+        # block. Without this, every website-less pair gets compared and the
+        # unsupervised model scores many unrelated companies at ~0.99.
+        def block_nonempty(col: str):
+            return block_on(f"NULLIF({col}, '')")
+
         blocking_rules = []
         if has_signal(NORM_NAME_TOKENS):
-            blocking_rules.append(block_on(NORM_NAME_TOKENS))
+            blocking_rules.append(block_nonempty(NORM_NAME_TOKENS))
         if has_signal(_POSTCODE):
-            blocking_rules.append(block_on(_POSTCODE))
+            blocking_rules.append(block_nonempty(_POSTCODE))
         if has_signal(NORM_DOMAIN):
-            blocking_rules.append(block_on(NORM_DOMAIN))
+            blocking_rules.append(block_nonempty(NORM_DOMAIN))
         if not blocking_rules:
             blocking_rules.append(block_on(f"substr({_NAME}, 1, 4)"))
 

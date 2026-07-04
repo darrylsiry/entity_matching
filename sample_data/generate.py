@@ -27,10 +27,10 @@ COMPANIES = [
      dict(name="Globex", website="globex.com/contact", ein="",
           address="500 Boulevard", city="Austin", postcode="73301", country="US")),
     # fuzzy name + same city/postcode -> probabilistic/fuzzy
-    (dict(name="Initech LLC", website="", ein="",
+    (dict(name="Initech Systems LLC", website="", ein="",
           address="200 Tech Way", city="Boston", postcode="02110", country="USA"),
-     dict(name="Initech Technologies", website="", ein="",
-          address="200 Technology Way", city="Boston", postcode="02110", country="US")),
+     dict(name="Initech Systems", website="", ein="",
+          address="200 Tech Way", city="Boston", postcode="02110", country="US")),
     # near-identical name, minor typo -> fuzzy
     (dict(name="Umbrella Health Group", website="", ein="",
           address="9 Raccoon Rd", city="Raccoon City", postcode="44101", country="USA"),
@@ -60,10 +60,10 @@ COMPANIES = [
           address="", city="Cambridge", postcode="", country="USA"),
      dict(name="Aperture Science Innovators", website="", ein="",
           address="", city="Boston", postcode="", country="US")),
-    (dict(name="Massive Dynamic Labs", website="", ein="",
-          address="", city="New York", postcode="", country="USA"),
-     dict(name="Massive Dynamic Ventures", website="", ein="",
-          address="", city="Boston", postcode="", country="US")),
+    (dict(name="Pinnacle Freight Services", website="", ein="",
+          address="", city="Denver", postcode="", country="USA"),
+     dict(name="Pinnacle Freight Systems", website="", ein="",
+          address="", city="Kansas City", postcode="", country="US")),
 ]
 
 # B-only distractors that resemble nothing in A.

@@ -69,8 +69,32 @@ def name_tokens(normalized_name: str) -> str:
     return " ".join(toks)
 
 
+# Domains that many unrelated companies share, so a shared value is NOT evidence of
+# being the same entity (free email, social, and site-builder/hosting domains).
+GENERIC_DOMAINS = frozenset({
+    "gmail.com", "googlemail.com", "yahoo.com", "yahoo.co.uk", "hotmail.com",
+    "outlook.com", "live.com", "aol.com", "icloud.com", "me.com", "mac.com",
+    "protonmail.com", "proton.me", "gmx.com", "mail.com", "yandex.com", "qq.com",
+    "163.com", "126.com", "linkedin.com", "facebook.com", "fb.com", "instagram.com",
+    "twitter.com", "x.com", "youtube.com", "wix.com", "wixsite.com", "squarespace.com",
+    "weebly.com", "godaddy.com", "wordpress.com", "blogspot.com", "shopify.com",
+    "example.com", "test.com", "sites.google.com",
+})
+
+# Registration/tax-id values that are placeholders, not real identifiers.
+_PLACEHOLDER_IDS = frozenset({
+    "na", "n/a", "none", "null", "nil", "tbd", "unknown", "pending", "notavailable",
+    "notapplicable", "xxx", "test",
+})
+_MIN_ID_LEN = 4  # ids shorter than this are too ambiguous to match on
+
+
 def normalize_domain(value: object) -> str:
-    """Extract a registrable domain from a URL or email. "" if none found."""
+    """Extract a registrable domain from a URL or email. "" if none/generic.
+
+    Returns "" for free-email/social/hosting domains (see GENERIC_DOMAINS) since a
+    shared value there is not evidence two companies are the same entity.
+    """
     text = _base(value)
     if not text:
         return ""
@@ -79,15 +103,27 @@ def normalize_domain(value: object) -> str:
     ext = _TLD(text)
     if not ext.domain or not ext.suffix:
         return ""
-    return f"{ext.domain}.{ext.suffix}"
+    domain = f"{ext.domain}.{ext.suffix}"
+    return "" if domain in GENERIC_DOMAINS else domain
 
 
 def normalize_id(value: object) -> str:
-    """Canonicalize a registration/tax id: keep alphanumerics only, lowercase."""
+    """Canonicalize a registration/tax id (alphanumerics, lowercase).
+
+    Returns "" for values too weak to match on: placeholders ("N/A", "unknown"),
+    anything shorter than _MIN_ID_LEN, or a single repeated character ("0000").
+    """
     text = _base(value)
     if not text:
         return ""
-    return _NON_ALNUM_RE.sub("", text)
+    if text in _PLACEHOLDER_IDS:
+        return ""
+    cleaned = _NON_ALNUM_RE.sub("", text)
+    if len(cleaned) < _MIN_ID_LEN:
+        return ""
+    if len(set(cleaned)) == 1:  # e.g. "0000", "aaaa"
+        return ""
+    return cleaned
 
 
 def normalize_generic(value: object) -> str:

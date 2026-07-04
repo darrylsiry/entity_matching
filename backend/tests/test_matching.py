@@ -38,6 +38,45 @@ def test_id_normalization():
     assert normalize.normalize_id("GB 123 4567 89") == "gb123456789"
 
 
+def test_id_normalization_rejects_placeholders_and_weak_ids():
+    for weak in ["N/A", "unknown", "TBD", "0", "12", "0000", "----"]:
+        assert normalize.normalize_id(weak) == "", weak
+
+
+def test_generic_domains_are_dropped():
+    # A shared free-email/social domain is not evidence of the same company.
+    assert normalize.normalize_domain("info@gmail.com") == ""
+    assert normalize.normalize_domain("https://linkedin.com/company/x") == ""
+    assert normalize.normalize_domain("https://www.acme.com/about") == "acme.com"
+
+
+def test_name_similarity_kills_subset_false_positive():
+    # token_set_ratio alone scores this 1.0; the length-aware metric must not.
+    subset = fuzzy.name_similarity(
+        normalize.normalize_name("Apple Inc"),
+        normalize.normalize_name("Apple Bank for Savings"),
+    )
+    assert subset < 0.6
+    # genuine variants / typos stay high
+    assert fuzzy.name_similarity(
+        normalize.normalize_name("Globex Corporation"),
+        normalize.normalize_name("Globex Corp"),
+    ) >= 0.9
+    assert fuzzy.name_similarity("umbrella health group", "umbrela health group") >= 0.9
+
+
+def test_address_conflict_demotes_name_match():
+    # Same-ish name, clearly different address -> pushed below a 0.90 match threshold.
+    has = {"addr": True, "city": False, "pc": False}
+    a = pd.Series({norm_col(CanonicalField.ADDRESS): "1 market st san francisco ca"})
+    b = pd.Series({norm_col(CanonicalField.ADDRESS): "900 pine road boston ma"})
+    demoted = fuzzy.corroborate(0.90, a, b, has)
+    assert demoted < 0.80
+    # agreeing address nudges up instead
+    b2 = pd.Series({norm_col(CanonicalField.ADDRESS): "1 market street san francisco ca"})
+    assert fuzzy.corroborate(0.90, a, b2, has) >= 0.90
+
+
 # ---- deterministic ---------------------------------------------------------
 
 def _frame(records: list[dict], mapping: dict) -> pd.DataFrame:

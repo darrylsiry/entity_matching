@@ -19,10 +19,20 @@ from rapidfuzz import fuzz
 from .schema import CanonicalField, norm_col
 
 _NAME = norm_col(CanonicalField.NAME)
+_ADDRESS = norm_col(CanonicalField.ADDRESS)
 _CITY = norm_col(CanonicalField.CITY)
 _POSTCODE = norm_col(CanonicalField.POSTCODE)
 
 _PREFIX_LEN = 4  # chars of each token used as a blocking key
+
+# Corroboration weights. A name match is inherently uncertain; agreeing secondary
+# fields raise confidence and a *conflicting address* lowers it. The address-conflict
+# penalty is deliberately large enough to push a name-only coincidence
+# ("Pacific Leasing" vs "Pacific Cleaning" at different addresses) out of the auto-match
+# band and into review, rather than silently accepting it.
+_ADDR_AGREE = 0.05
+_ADDR_CONFLICT = -0.18
+_FIELD_AGREE = 0.03
 
 
 def _empty_pairs() -> pd.DataFrame:
@@ -32,6 +42,49 @@ def _empty_pairs() -> pd.DataFrame:
 def _block_keys(name: str) -> list[str]:
     """One key per token: its first _PREFIX_LEN chars."""
     return [tok[:_PREFIX_LEN] for tok in name.split() if tok]
+
+
+def corroborate(name_score: float, row_a, row_b, has: dict) -> float:
+    """Adjust a name-similarity score using secondary fields.
+
+    Agreement (matching city/postcode, similar address) nudges it up; a clearly
+    different address pulls it down so a coincidental name match is surfaced for
+    review instead of auto-accepted. Missing fields never penalize. Clamped to [0, 1].
+    """
+    delta = 0.0
+    if has.get("addr"):
+        av, bv = row_a[_ADDRESS], row_b[_ADDRESS]
+        if av and bv:
+            s = fuzz.token_set_ratio(av, bv) / 100.0
+            if s >= 0.70:
+                delta += _ADDR_AGREE
+            elif s < 0.45:
+                delta += _ADDR_CONFLICT
+    if has.get("city") and row_a[_CITY] and row_a[_CITY] == row_b[_CITY]:
+        delta += _FIELD_AGREE
+    if has.get("pc") and row_a[_POSTCODE] and row_a[_POSTCODE] == row_b[_POSTCODE]:
+        delta += _FIELD_AGREE
+    return max(0.0, min(1.0, name_score + delta))
+
+
+def _availability(a: pd.DataFrame, b: pd.DataFrame) -> dict:
+    return {
+        "addr": _ADDRESS in a and _ADDRESS in b,
+        "city": _CITY in a and _CITY in b,
+        "pc": _POSTCODE in a and _POSTCODE in b,
+    }
+
+
+def name_similarity(a: str, b: str) -> float:
+    """Length-aware name similarity in [0, 1].
+
+    Uses min(token_sort_ratio, token_set_ratio) rather than token_set_ratio alone.
+    token_set_ratio returns 1.0 whenever one name's tokens are a *subset* of the
+    other's ("Apple" vs "Apple Bank for Savings" -> 1.0), which is a major source of
+    false positives. token_sort_ratio has no such subset leniency, so taking the min
+    keeps genuine matches (and typos) high while collapsing subset coincidences.
+    """
+    return min(fuzz.token_sort_ratio(a, b), fuzz.token_set_ratio(a, b)) / 100.0
 
 
 def match_fuzzy(
@@ -62,8 +115,7 @@ def match_fuzzy(
         for key in _block_keys(name):
             b_blocks.setdefault(key, []).append(idx)
 
-    has_city = _CITY in a_use and _CITY in b_use
-    has_pc = _POSTCODE in a_use and _POSTCODE in b_use
+    has = _availability(a_use, b_use)
 
     rows: list[dict] = []
     for idx_a, row_a in a_use.iterrows():
@@ -74,12 +126,7 @@ def match_fuzzy(
         best_idx, best_score = None, 0.0
         for idx_b in candidates:
             row_b = b_use.loc[idx_b]
-            score = fuzz.token_set_ratio(name_a, row_b[_NAME]) / 100.0
-            # Small corroboration boost when location also agrees.
-            if has_city and row_a[_CITY] and row_a[_CITY] == row_b[_CITY]:
-                score = min(1.0, score + 0.05)
-            if has_pc and row_a[_POSTCODE] and row_a[_POSTCODE] == row_b[_POSTCODE]:
-                score = min(1.0, score + 0.05)
+            score = corroborate(name_similarity(name_a, row_b[_NAME]), row_a, row_b, has)
             if score > best_score:
                 best_idx, best_score = idx_b, score
         if best_idx is not None and best_score >= threshold:
@@ -119,8 +166,7 @@ def match_fuzzy_within(
         for key in _block_keys(name):
             blocks.setdefault(key, []).append(idx)
 
-    has_city = _CITY in use
-    has_pc = _POSTCODE in use
+    has = _availability(use, use)
 
     seen: set[tuple[int, int]] = set()
     rows: list[dict] = []
@@ -135,11 +181,7 @@ def match_fuzzy_within(
                 continue
             seen.add((lo, hi))
             row_j = use.loc[idx_j]
-            score = fuzz.token_set_ratio(name_i, row_j[_NAME]) / 100.0
-            if has_city and row_i[_CITY] and row_i[_CITY] == row_j[_CITY]:
-                score = min(1.0, score + 0.05)
-            if has_pc and row_i[_POSTCODE] and row_i[_POSTCODE] == row_j[_POSTCODE]:
-                score = min(1.0, score + 0.05)
+            score = corroborate(name_similarity(name_i, row_j[_NAME]), row_i, row_j, has)
             if score >= threshold:
                 rows.append(
                     {"idx_a": lo, "idx_b": hi, "score": round(score, 4),

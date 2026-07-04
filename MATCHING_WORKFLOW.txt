@@ -1,0 +1,246 @@
+================================================================================
+ENTITY MATCHING — HOW THE MATCHING WORKS (plain-English reference)
+================================================================================
+
+This document describes, in order, what the matching engine does, which
+open-source tools each step uses, and every parameter/threshold that is set.
+It reflects the code in backend/app/matching/ (pipeline, normalize, deterministic,
+probabilistic, fuzzy, scoring, cluster, dedupe).
+
+There are TWO modes. They share the same steps; the only differences are what gets
+compared and how the final answer is shaped:
+
+  • LINK MODE ("compare two files")  — match rows of File A against File B.
+      Output: matched pairs (A <-> B) classified as Match or Review, with everything
+      else reported as "unique" (unmatched).
+
+  • DEDUPE MODE ("deduplicate one file") — find duplicate rows within one file.
+      Output: every row gets a "master ID"; rows sharing a master ID are the same
+      company.
+
+The core idea is a CASCADE (a waterfall): run the strongest, most certain method
+first, remove whatever it confidently resolves, then run the next method only on
+what's left. Cheap/strict methods handle the easy cases; fuzzier methods handle the
+leftovers. "Blocking" (only comparing records that share some signal) is what keeps
+it fast enough for 100k+ rows without comparing every possible pair.
+
+
+--------------------------------------------------------------------------------
+CANONICAL FIELDS
+--------------------------------------------------------------------------------
+Uploaded files can have any column names. During "Map columns" (link mode) or
+auto-detection (dedupe mode) each source column is mapped to one of these canonical
+fields. Everything downstream speaks in these names:
+
+  name            (REQUIRED)   company / legal name
+  registration_id              DUNS / EIN / VAT / company number
+  website                      URL or email (a domain is extracted from it)
+  address                      street address
+  city, state, postcode, country
+
+
+--------------------------------------------------------------------------------
+STAGE 0 — NORMALIZE   (always runs first)
+--------------------------------------------------------------------------------
+Turns messy raw values into clean, comparable forms so trivial formatting
+differences don't block a match.  File: normalize.py
+
+Tools: cleanco (strips legal suffixes), tldextract (domain parsing, offline/pinned
+suffix list), Unidecode (accent folding), pandas.
+
+What it does per field:
+  • name:
+      - Unicode-fold (Café -> cafe), lowercase, trim.
+      - Strip corporate/legal suffixes via cleanco (Inc, LLC, Ltd, GmbH, Corp, ...).
+      - Remove punctuation, collapse whitespace.
+      - Also derive a "name tokens" key = the unique words sorted alphabetically
+        (so "Acme Global" and "Global Acme" produce the same key). Used for blocking.
+  • website -> domain:
+      - Extract the registrable domain from a URL or email
+        ("https://www.Acme.com/about" and "jane@acme.com" both -> "acme.com").
+      - GUARD: generic/shared domains are dropped to "" (treated as no signal),
+        because many unrelated companies share them. Blocklist includes free email
+        (gmail.com, yahoo.com, outlook.com, hotmail.com, icloud.com, aol.com, ...),
+        social (linkedin.com, facebook.com, x.com/twitter, instagram, youtube),
+        and site-builders/hosting (wix, squarespace, weebly, godaddy, wordpress,
+        shopify, blogspot), plus example.com/test.com.
+  • registration_id:
+      - Keep alphanumerics only, lowercase.
+      - GUARD: return "" (no signal) for placeholders ("N/A", "none", "null", "tbd",
+        "unknown", "test", ...), for values shorter than 4 characters, or for a single
+        repeated character ("0000", "aaaa").
+  • address / city / state / country: punctuation-stripped, whitespace-collapsed.
+  • postcode: alphanumerics only ("SW1A 1AA" -> "sw1a1aa").
+
+
+--------------------------------------------------------------------------------
+STAGE 1 — DETERMINISTIC (exact identifier match)   [strongest, runs first]
+--------------------------------------------------------------------------------
+Exact joins on near-certain identifiers.  File: deterministic.py   Tool: pandas.
+
+Order of keys (highest priority first); empty/guarded values are ignored:
+  1. registration_id  (exact, normalized)
+  2. website domain    (exact, normalized)
+
+Any pair that matches on either key is emitted with a fixed score of 0.99.
+Records matched here are REMOVED from the pool before the probabilistic stage runs.
+(If both keys agree, the higher-priority rule — registration_id — is recorded.)
+
+  Parameter:  DETERMINISTIC_SCORE = 0.99
+
+
+--------------------------------------------------------------------------------
+STAGE 2 — PROBABILISTIC (Splink / Fellegi–Sunter)   [runs on the leftovers]
+--------------------------------------------------------------------------------
+The scalable workhorse. Instead of comparing all pairs, it uses BLOCKING to generate
+only plausible candidate pairs, then scores each with a probabilistic model over
+several field comparisons.  File: probabilistic.py
+Tool: Splink 4 on a DuckDB backend.
+
+Runs only on records NOT already resolved by Stage 1.
+  • Link mode:  link_type = "link_only"   (only cross-file A<->B pairs)
+  • Dedupe mode: link_type = "dedupe_only" (within-file pairs)
+
+BLOCKING RULES (a pair is considered only if it shares at least one of these; each key
+is wrapped so that EMPTY values are NOT joined — this is important, otherwise every
+blank-website row would be lumped together and mis-scored):
+  • name tokens (the sorted-words key)
+  • postcode
+  • website domain
+  (If none of those carry signal, it falls back to blocking on the first 4 characters
+   of the name.)
+
+FIELD COMPARISONS used to score a candidate pair (only fields present in the data):
+  • name      — Jaro-Winkler at thresholds [0.9, 0.8]
+  • domain    — exact match
+  • address   — Levenshtein at thresholds [2, 5] (edit distance)
+  • postcode  — exact match
+  • city      — exact match
+
+MODEL TRAINING (unsupervised — no labelled data needed):
+  • estimate_probability_two_random_records_match(recall = 0.7)
+  • estimate_u_using_random_sampling(max_pairs = 1,000,000)
+  • Expectation-Maximisation (EM) run once per blocking rule to learn "m" values.
+
+PREDICTION:
+  • Emit pairs with match_probability >= probabilistic_threshold (default 0.75).
+  • A probabilistic pair scoring >= the MATCH threshold (0.90) is treated as
+    confidently resolved and removed before the fuzzy stage; weaker ones are left in
+    so the fuzzy stage can still weigh in.
+
+Robustness: the entire Splink stage is defensive — if Splink isn't installed or EM
+fails to converge on small/low-variety data, it logs a warning and returns nothing,
+and the pipeline falls back to the fuzzy stage rather than crashing.
+
+
+--------------------------------------------------------------------------------
+STAGE 3 — FUZZY FALLBACK (rapidfuzz)   [runs on whatever is still unresolved]
+--------------------------------------------------------------------------------
+Catches remaining matches by name similarity.  File: fuzzy.py   Tool: rapidfuzz.
+
+BLOCKING: each record contributes one key per name word = that word's first 4
+characters. Two records are compared if they share ANY key. This tolerates word-order
+differences and typos after the 4th character while keeping the comparison count low.
+  Parameter:  _PREFIX_LEN = 4
+
+NAME SIMILARITY METRIC (0..1):
+  score = min( token_sort_ratio , token_set_ratio )
+  We deliberately take the MINIMUM of the two rather than token_set_ratio alone.
+  token_set_ratio returns 1.0 whenever one name's words are a subset of the other's
+  ("Apple" vs "Apple Bank for Savings" -> 1.0), which caused false positives;
+  token_sort_ratio has no such subset leniency, so the min keeps genuine matches and
+  typos high while collapsing subset coincidences.
+
+CORROBORATION / CONFLICT ADJUSTMENT (applied to the name score using other fields;
+missing fields never penalize):
+  • address: compared with token_set_ratio.
+      - similar   (>= 0.70):  +0.05   (agreement raises confidence)
+      - conflicting (< 0.45): -0.18   (clearly different address pushes a name-only
+                                       coincidence DOWN, into the review band instead
+                                       of auto-matching)
+  • same city:      +0.03
+  • same postcode:  +0.03
+  Final score is clamped to [0, 1].
+    Parameters:  _ADDR_AGREE = +0.05,  _ADDR_CONFLICT = -0.18,  _FIELD_AGREE = +0.03
+
+EMIT:
+  • Link mode: for each A record, keep only its single BEST B match whose adjusted
+    score is >= fuzzy_threshold (default 0.80).
+  • Dedupe mode: emit every within-file pair >= fuzzy_threshold (so multi-row
+    duplicate groups link up fully).
+
+
+--------------------------------------------------------------------------------
+STAGE 4 — RESOLVE (combine + classify)
+--------------------------------------------------------------------------------
+File: scoring.py (link) / cluster.py + dedupe.py (dedupe).
+
+LINK MODE — classify each pair by its score into bands:
+  • score >= 0.90  -> MATCH   (auto-accepted)
+  • score >= 0.75  -> REVIEW  (uncertain; surfaced for a human decision)
+  • score <  0.75  -> dropped (no match)
+  Each A record keeps only its single highest-scoring pair (deterministic 0.99 hits
+  naturally win). Every A and B row that ends up in no Match/Review pair is reported
+  as "unique" (unmatched), so the categories reconcile:
+      per file:  matched + review + unique  =  total rows.
+    Parameters:  match threshold = 0.90,  review threshold = 0.75
+
+DEDUPE MODE — cluster instead of classify:
+  All links from Stages 1–3 are pooled and connected-components are computed with a
+  union-find (disjoint-set) algorithm. Each connected group becomes one entity and
+  gets a master ID (numbered by smallest row index, so IDs are stable). Rows with no
+  links are singletons (their own master ID).
+
+
+--------------------------------------------------------------------------------
+HUMAN REVIEW WORKFLOW (link mode only)
+--------------------------------------------------------------------------------
+File: review.py. For every pair classified as REVIEW the user can:
+  • Confirm  -> it becomes a MATCH in the final dataset (and CSV export).
+  • Dismiss  -> it is not a match; the two records revert to "unique".
+  • Undo     -> clears a prior decision.
+Decisions are stored as a small overlay and applied when results/counts/CSV are read,
+so the exported dataset always reflects the user's choices.
+
+
+--------------------------------------------------------------------------------
+ALL TUNABLE PARAMETERS AND THEIR DEFAULTS
+--------------------------------------------------------------------------------
+Set on the "Configure" step (SessionConfig) — user-adjustable per run:
+  use_deterministic          = true      turn Stage 1 on/off
+  use_probabilistic          = true      turn Stage 2 (Splink) on/off
+  use_fuzzy                  = true      turn Stage 3 on/off
+  thresholds.match           = 0.90      score at/above this = Match
+  thresholds.review          = 0.75      score at/above this = Review (else dropped)
+  fuzzy_threshold            = 0.80      min name score for the fuzzy stage to emit
+  probabilistic_threshold    = 0.75      min Splink probability to emit a pair
+
+Fixed in code (not exposed in the UI):
+  Deterministic score                = 0.99
+  Deterministic key order            = registration_id, then website domain
+  Registration-id guard              = drop if placeholder, < 4 chars, or all-same-char
+  Generic-domain blocklist           = free email / social / site-builders (dropped)
+  Fuzzy blocking key length          = first 4 chars of each name word
+  Fuzzy name metric                  = min(token_sort_ratio, token_set_ratio)
+  Fuzzy address agree / conflict     = +0.05 (sim >= 0.70) / -0.18 (sim < 0.45)
+  Fuzzy same-city / same-postcode    = +0.03 each
+  Splink blocking keys               = name tokens, postcode, domain (empties excluded)
+  Splink name comparison             = Jaro-Winkler thresholds [0.9, 0.8]
+  Splink address comparison          = Levenshtein thresholds [2, 5]
+  Splink domain/postcode/city        = exact match
+  Splink u-training sample size      = 1,000,000 random pairs
+  Splink probability-two-match recall= 0.7
+
+
+--------------------------------------------------------------------------------
+TOOLS AT A GLANCE
+--------------------------------------------------------------------------------
+  pandas        data handling throughout; exact joins for Stage 1
+  cleanco       strip legal/corporate name suffixes
+  tldextract    extract registrable domain from URLs/emails
+  Unidecode     fold accents to ASCII
+  Splink 4      probabilistic record linkage (Fellegi–Sunter)
+  DuckDB        embedded columnar engine Splink runs on
+  rapidfuzz     fast fuzzy string similarity (token_sort / token_set / Jaro-Winkler)
+  union-find    connected-components clustering for single-file dedupe (hand-rolled)
+================================================================================
