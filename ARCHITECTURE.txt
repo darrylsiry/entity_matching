@@ -1,0 +1,308 @@
+================================================================================
+ENTITY MATCHING — APPLICATION ARCHITECTURE (plain-English reference)
+================================================================================
+
+This document explains how the app is put together: the backend, the frontend,
+how the two talk to each other, and how everything is packaged into a single
+Docker image for deployment. It complements MATCHING_WORKFLOW.txt (which covers the
+matching algorithm itself) and DEPLOY.md (step-by-step Fly.io instructions).
+
+
+--------------------------------------------------------------------------------
+1. THE BIG PICTURE
+--------------------------------------------------------------------------------
+The app is a single-page web application (React) talking to a JSON HTTP API
+(Python / FastAPI). Matching work is CPU/IO-heavy and can take a while on large
+files, so it runs as a background job and the browser polls for progress.
+
+Two things are worth understanding up front:
+
+  • ONE ORIGIN IN PRODUCTION. In the deployed Docker image, the Python backend
+    ALSO serves the compiled frontend as static files. So there is a single web
+    server and a single URL — the browser loads the page and calls the API from
+    the same origin (no CORS, no separate frontend host).
+
+  • TWO SERVERS IN DEVELOPMENT. While developing, the frontend runs on its own hot-
+    reloading dev server (Vite, port 5173) and the backend runs separately
+    (uvicorn, port 8000). Vite proxies API calls to the backend so the browser
+    still sees one origin. (See section 5.)
+
+High-level layout:
+
+        Browser (React SPA)
+              |
+              |  HTTP  (relative paths: /api/..., /health)
+              v
+        FastAPI app  (app/main.py)
+         |        \
+         |         \__ serves the built React files (production only)
+         |
+         +-- /api routes (app/api/routes.py)
+                 |
+                 +-- service layer (app/service.py, review.py, evaluation.py)
+                 +-- matching engine (app/matching/*)
+                 +-- job registry (app/jobs.py, in-memory)
+                 +-- storage (app/storage.py -> parquet/JSON files on disk)
+
+
+--------------------------------------------------------------------------------
+2. BACKEND (Python / FastAPI)   —  backend/app/
+--------------------------------------------------------------------------------
+FastAPI web app. Uvicorn is the ASGI server that runs it. Data is handled with
+pandas; results are stored as Parquet files on local disk.
+
+Top-level modules (backend/app/):
+
+  main.py        The FastAPI application object. Sets up dev CORS, includes the API
+                 router, exposes GET /health, initializes storage on startup, and —
+                 if FRONTEND_DIST points at a built frontend — MOUNTS those static
+                 files at "/" (this is how one process serves both API and UI in
+                 production). The static mount is added last so /api and /health win.
+
+  api/routes.py  All HTTP endpoints (see section 6). Thin layer: it validates input,
+                 calls the service/matching code, and shapes responses. Long-running
+                 matching is handed to FastAPI BackgroundTasks so the request returns
+                 immediately.
+
+  models.py      Pydantic request/response schemas (typed API contract): upload,
+                 session config, status, match pairs, clusters, decisions, evaluation.
+
+  jobs.py        In-memory registry of running match jobs (JobRegistry, thread-locked).
+                 Tracks state (pending/running/done/error), current stage, progress
+                 (0..1), and summary counts. This is process-local (see caveats).
+
+  storage.py     All persistence. Reads/writes files under a data directory
+                 (ENTITY_MATCHING_DATA_DIR, default backend/data/):
+                   - uploads/<file_id>.parquet + .json  (an uploaded table + metadata)
+                   - sessions/<session_id>.json          (the run's config)
+                   - sessions/<session_id>_results.parquet (the match/cluster output)
+                   - sessions/<session_id>_decisions.json  (review confirm/dismiss overlay)
+                 Parquet keeps 100k-row files fast and cheap to load. Swap this module
+                 for object storage / a database to scale beyond one machine.
+
+  service.py     Glue between the API and the matching engine. run_match_job() is the
+                 background entrypoint: it loads the uploaded file(s) + config, runs the
+                 correct pipeline (link vs dedupe), updates the job registry with
+                 progress, and saves results. Also "enriches" raw pair indices back into
+                 full source records for display/download, and builds dedupe clusters.
+
+  review.py      The human-in-the-loop layer (link mode). Stores confirm/dismiss
+                 decisions as a small overlay and applies them at read time to produce
+                 the "effective" result frame — so results, counts, and the CSV always
+                 reflect the user's choices without rewriting the big results file.
+
+  evaluation.py  Developer-only accuracy check. If a ground_truth_matches.csv is present
+                 and the uploaded data corresponds to it, reports precision/recall/F1 of
+                 the matches. Harmless/absent otherwise.
+
+  matching/      The matching engine (pure functions over pandas DataFrames; no web or
+                 storage concerns). See MATCHING_WORKFLOW.txt for the algorithm. Files:
+                   schema.py        canonical field definitions + column mapping model
+                   normalize.py     Stage 0: clean names/domains/ids/addresses
+                   deterministic.py Stage 1: exact id/domain matches
+                   probabilistic.py Stage 2: Splink (Fellegi–Sunter) on DuckDB
+                   fuzzy.py         Stage 3: rapidfuzz name similarity + corroboration
+                   scoring.py       Stage 4 (link): classify Match/Review/No-match
+                   cluster.py       union-find connected-components (dedupe)
+                   dedupe.py        Stage 4 (single-file): cluster into master IDs
+                   pipeline.py      orchestrates the two-file cascade end to end
+
+Request lifecycle of a matching run (link mode):
+  1. POST /api/upload (x2)      -> files parsed, stored, return file_ids + columns.
+  2. POST /api/session          -> pair the files + column mappings + config -> session_id.
+  3. POST /api/session/{id}/run -> a BackgroundTask starts run_match_job(); returns now.
+  4. GET  /api/session/{id}/status (polled) -> {state, stage, progress, counts}.
+  5. GET  /api/session/{id}/results?...     -> paginated, enriched pairs once done.
+  6. POST /api/session/{id}/decision (per review pair) -> confirm/dismiss/undo.
+  7. GET  /api/session/{id}/download        -> final CSV reflecting all decisions.
+(Dedupe mode is the same but one file, no column-map step, and /clusters instead of
+/results.)
+
+Key backend dependencies (backend/requirements.txt): fastapi, uvicorn, pydantic,
+pandas, pyarrow (Parquet), openpyxl (Excel), duckdb + splink (probabilistic linkage),
+rapidfuzz, cleanco, tldextract, Unidecode, python-multipart.
+
+
+--------------------------------------------------------------------------------
+3. FRONTEND (React + TypeScript, built with Vite)   —  frontend/src/
+--------------------------------------------------------------------------------
+A single-page "wizard" that walks the user through the flow. No client-side router;
+it's a step machine driven by React state.
+
+  main.tsx           Entry point; mounts <App/> into the page.
+  App.tsx            The wizard shell. Holds all shared state (mode, uploaded files,
+                     column mappings, config, session id) and renders the current step.
+                     The visible steps depend on the mode:
+                       link:   Mode -> Upload -> Map columns -> Configure -> Run -> Results
+                       dedupe: Mode -> Upload ->              Configure -> Run -> Results
+  api.ts             The typed API client. One function per endpoint. All calls use
+                     RELATIVE paths ("/api/...") so the same code works in dev (via the
+                     Vite proxy) and in production (same origin). Also defines the
+                     TypeScript types mirroring the backend's Pydantic models.
+  mapping.ts         Heuristic that guesses which column is name/address/domain/id from
+                     the header names. Used to pre-fill (link) or auto-detect (dedupe).
+
+  components/        One component per wizard step, plus shared pieces:
+    ModeStep         choose "compare two files" vs "deduplicate one file"
+    UploadStep       drag/drop one or two CSV/XLSX files
+    ColumnMapStep    (link) map each file's columns to canonical fields
+    FieldMapper      reusable column->field dropdown table (used by map step + dedupe)
+    ConfigStep       toggle stages + set thresholds; in dedupe, the "Detected fields" panel
+    RunStep          create session, start the job, show a live progress bar (polling)
+    ResultsStep      (link) reconciliation bars, filter tabs (All/Match/Review/Dismissed/
+                     Unique A/Unique B), pair cards, Confirm/Dismiss/Undo, CSV download,
+                     and the optional accuracy box
+    DedupeResultsStep(dedupe) master-ID cluster cards, filters, CSV download
+
+  App.css / index.css  Styling (dark theme, hand-written CSS — no UI framework).
+
+Build tool: Vite. `npm run build` runs the TypeScript compiler then Vite, producing a
+static bundle in frontend/dist/ (index.html + hashed JS/CSS in assets/).
+
+Key frontend dependencies: react, react-dom, typescript, vite, @vitejs/plugin-react.
+
+
+--------------------------------------------------------------------------------
+4. HOW BACKEND AND FRONTEND INTERACT
+--------------------------------------------------------------------------------
+The contract is the JSON HTTP API under /api (section 6). The frontend never imports
+backend code; it only calls these endpoints. Types are mirrored by hand in api.ts.
+
+Because the frontend uses relative URLs, the SAME built code runs in both environments:
+
+  DEVELOPMENT (two servers, Vite proxy):
+     Browser -> http://localhost:5173 (Vite dev server, hot reload)
+        - requests to "/api/*" and "/health" are proxied by Vite to
+          http://127.0.0.1:8000 (the uvicorn backend).  [see frontend/vite.config.ts]
+        - Backend also allows CORS from localhost:5173 as a belt-and-suspenders.
+
+  PRODUCTION (one server):
+     Browser -> https://<app>  (uvicorn)
+        - FastAPI serves the built React files from FRONTEND_DIST (=/app/static) at "/".
+        - "/api/*" and "/health" are handled by the API. Same origin, so no CORS.
+
+
+--------------------------------------------------------------------------------
+5. LOCAL DEVELOPMENT TOOLING
+--------------------------------------------------------------------------------
+  dev.sh        Starts backend (uvicorn --reload on :8000) AND frontend (Vite on :5173)
+                together; Ctrl+C stops both. Frees a stale port 8000 if needed and kills
+                the whole process group on exit so nothing is orphaned.
+  Makefile      Convenience targets:
+                  make install  create the venv + install backend and frontend deps
+                  make dev      run both servers (calls ./dev.sh)
+                  make sample   regenerate the demo CSVs in sample_data/
+                  make test     run backend pytest
+                  make backend / make frontend  run just one side
+
+
+--------------------------------------------------------------------------------
+6. HTTP API SURFACE   (prefix: /api)
+--------------------------------------------------------------------------------
+  GET  /health                          liveness probe (used by the Fly health check)
+  GET  /api/fields                      canonical fields to map columns onto
+  POST /api/upload                      upload one CSV/XLSX -> file_id + detected columns
+  POST /api/session                     create a run: mode + file(s) + mappings + config
+  POST /api/session/{id}/run            start the background matching job
+  GET  /api/session/{id}/status         poll {state, stage, progress, counts}
+  GET  /api/session/{id}/results        (link) paginated pairs, filterable by class
+  POST /api/session/{id}/decision       (link) confirm / dismiss / undo a review pair
+  GET  /api/session/{id}/clusters       (dedupe) master-ID clusters, paginated
+  GET  /api/session/{id}/evaluation     (debug) precision/recall vs ground truth, if present
+  GET  /api/session/{id}/download       final results as CSV (reflects review decisions)
+
+
+--------------------------------------------------------------------------------
+7. DATA / PERSISTENCE MODEL
+--------------------------------------------------------------------------------
+Everything lives on the local filesystem under ENTITY_MATCHING_DATA_DIR (default
+backend/data/, set to /data in the container):
+
+  uploads/<file_id>.parquet     the uploaded table (all columns as strings)
+  uploads/<file_id>.json        {filename, columns, rows}
+  sessions/<session_id>.json    the run request (mode, file ids, mappings, config)
+  sessions/<session_id>_results.parquet   the match pairs (+ unique rows) or dedupe clusters
+  sessions/<session_id>_decisions.json    review overlay: {"idxA:idxB": "confirmed"|"dismissed"}
+
+Job progress/counts live in memory (jobs.py). After a restart the in-memory job is gone,
+but because results are on disk, status still reports "done" when a results file exists.
+
+
+--------------------------------------------------------------------------------
+8. DOCKER PACKAGING
+--------------------------------------------------------------------------------
+The whole app ships as ONE image built by a multi-stage Dockerfile. The two stages keep
+Node out of the final image — only the built static files are copied forward.
+
+  STAGE 1  "frontend"  (base: node:22-alpine)
+     - Copy package.json + lockfile, `npm ci` (cached unless deps change).
+     - Copy the frontend source, `npm run build`  ->  /frontend/dist
+
+  STAGE 2  "runtime"   (base: python:3.11-slim)   <-- the final image
+     - Copy backend/requirements.txt, `pip install` (all deps ship as manylinux
+       wheels for cp311, so no compiler/build tools are needed).
+     - Copy backend/app  ->  /app/app
+     - Copy the built frontend from Stage 1  ->  /app/static
+     - Copy ground_truth_matches.csv (used only by the optional accuracy box).
+     - Create the writable data dir /data.
+     - EXPOSE 8080; run:  uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}
+
+  Environment set in the image:
+     PORT=8080                          port uvicorn binds
+     ENTITY_MATCHING_DATA_DIR=/data     where uploads/results are written
+     FRONTEND_DIST=/app/static          tells FastAPI to serve the built UI from here
+     GROUND_TRUTH_PATH=/app/ground_truth_matches.csv   (accuracy box; harmless otherwise)
+     PYTHONUNBUFFERED / PYTHONDONTWRITEBYTECODE / PIP_NO_CACHE_DIR  (clean runtime)
+
+  So the running container is a SINGLE process: uvicorn serving BOTH the JSON API and
+  the React app on port 8080. .dockerignore keeps node_modules/.venv/data/etc out of
+  the build context.
+
+  Build & run locally:
+     docker build -t entity-matching .
+     docker run -p 8080:8080 -v em_data:/data entity-matching   # -> http://localhost:8080
+
+
+--------------------------------------------------------------------------------
+9. DEPLOYMENT (Fly.io)   —  fly.toml
+--------------------------------------------------------------------------------
+Fly builds the Dockerfile (on its remote builder by default — no local Docker needed)
+and runs the image as a microVM. Key config in fly.toml:
+
+  [build] dockerfile = "Dockerfile"
+  internal_port = 8080                 matches the container's port
+  [[mounts]] source="em_data" -> "/data"   a persistent volume so uploads/results survive
+                                            restarts and redeploys
+  health check: GET /health
+  [[vm]] shared-cpu-2x, 2gb            Splink + DuckDB + pandas need real memory for
+                                       100k-row files
+  auto_stop_machines="stop", auto_start_machines=true, min_machines_running=1
+
+  IMPORTANT — single machine on purpose. The job registry is in memory and results live
+  on the machine's volume, so every request in a session must reach the SAME instance.
+  Don't scale to multiple machines without first moving the job state to something shared
+  (e.g. Redis) and results to shared storage (e.g. object storage / Postgres).
+
+  Deploy:  fly volumes create em_data --size 1 --region iad   (one-time)
+           fly deploy
+  (See DEPLOY.md for full steps.)
+
+
+--------------------------------------------------------------------------------
+10. THINGS A READER SHOULD KNOW (design choices & caveats)
+--------------------------------------------------------------------------------
+  • Prototype-grade persistence: local Parquet/JSON files, no database. Simple and fast
+    to run; not multi-user durable. The storage.py module is the single seam to replace.
+  • Jobs are in-process (FastAPI BackgroundTasks) and tracked in memory. Fine for one
+    machine; move to a real queue (Celery/RQ + Redis) to scale out or survive restarts
+    mid-run.
+  • No authentication. Anyone with the URL can upload files and run matches. Add auth or
+    put it behind private networking before exposing it publicly.
+  • Python 3.11 is required for the backend (some dependencies — Splink/rapidfuzz/etc. —
+    lack wheels on the very newest Python at time of writing). 3.12/3.13 are also fine.
+  • The matching engine (app/matching/*) is deliberately decoupled: pure functions over
+    DataFrames, no web/storage/UI knowledge, which is why it's easy to unit-test
+    (backend/tests/) and reason about independently of the API.
+  • The frontend/backend "contract" is duplicated by hand (Pydantic models <-> api.ts
+    types). If you change a response shape on one side, update the other.
+================================================================================
