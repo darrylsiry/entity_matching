@@ -17,6 +17,7 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     ENTITY_MATCHING_DATA_DIR=/data \
     FRONTEND_DIST=/app/static \
+    GROUND_TRUTH_PATH=/app/ground_truth_matches.csv \
     PORT=8080
 
 WORKDIR /app
@@ -27,6 +28,10 @@ RUN pip install -r requirements.txt
 
 COPY backend/app ./app
 COPY --from=frontend /frontend/dist ./static
+
+# Ground-truth file for the debug accuracy box (see app/evaluation.py). Harmless in
+# production — the box only renders when uploaded data matches this file.
+COPY ground_truth_matches.csv ./ground_truth_matches.csv
 
 # Writable data dir for uploads/results (mount a Fly volume here to persist).
 RUN mkdir -p /data
