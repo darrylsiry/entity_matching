@@ -91,6 +91,22 @@ class DecisionResponse(BaseModel):
     counts: dict
 
 
+class EvaluationResponse(BaseModel):
+    """Debug-only accuracy vs a ground-truth file."""
+
+    available: bool
+    applicable: bool = False
+    reason: str | None = None
+    precision: float = 0.0
+    recall: float = 0.0
+    f1: float = 0.0
+    tp: int = 0
+    fp: int = 0
+    fn: int = 0
+    ground_truth_total: int = 0
+    predicted_total: int = 0
+
+
 class ResultsResponse(BaseModel):
     session_id: str
     total: int

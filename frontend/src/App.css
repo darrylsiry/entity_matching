@@ -398,6 +398,63 @@ select {
   justify-content: space-between;
   align-items: center;
 }
+.head-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* debug: accuracy vs ground truth */
+.eval-box {
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  padding: 6px 12px;
+  background: var(--panel-2);
+  min-width: 120px;
+  cursor: help;
+  line-height: 1.25;
+}
+.eval-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+.eval-score {
+  font-size: 20px;
+  font-weight: 700;
+}
+.eval-metric {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.eval-sub {
+  display: flex;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.eval-counts {
+  display: flex;
+  gap: 8px;
+  font-size: 11px;
+  margin-top: 2px;
+}
+.eval-counts .ok {
+  color: var(--match);
+}
+.eval-counts .bad {
+  color: var(--danger);
+}
+.eval-counts .miss {
+  color: var(--review);
+}
+.eval-na {
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 600;
+}
 .summary-row {
   display: flex;
   gap: 12px;

@@ -8,7 +8,7 @@ import pandas as pd
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 
-from .. import review, service, storage
+from .. import evaluation, review, service, storage
 from ..jobs import JobState, registry
 from ..matching.schema import FIELD_SPECS
 from ..matching.scoring import MATCH, REVIEW
@@ -20,6 +20,7 @@ from ..models import (
     CreateSessionResponse,
     DecisionRequest,
     DecisionResponse,
+    EvaluationResponse,
     FieldSpecOut,
     MatchPair,
     ResultsResponse,
@@ -188,6 +189,16 @@ def decide(session_id: str, req: DecisionRequest) -> DecisionResponse:
     return DecisionResponse(
         session_id=session_id, counts=review.effective_counts(session_id)
     )
+
+
+@router.get("/session/{session_id}/evaluation", response_model=EvaluationResponse)
+def get_evaluation(session_id: str) -> EvaluationResponse:
+    """Debug: score the session's matches against the repo's ground-truth file."""
+    try:
+        result = evaluation.evaluate(session_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return EvaluationResponse(**result)
 
 
 def _session_mode(session_id: str) -> str:

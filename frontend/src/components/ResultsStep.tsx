@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   downloadUrl,
+  getEvaluation,
   getResults,
   postDecision,
   type Decision,
+  type Evaluation,
   type MatchPair,
   type ResultsResponse,
 } from '../api'
@@ -25,20 +27,28 @@ const FILTERS = [
 
 export function ResultsStep({ sessionId, onReset }: Props) {
   const [data, setData] = useState<ResultsResponse | null>(null)
+  const [evalu, setEvalu] = useState<Evaluation | null>(null)
   const [filter, setFilter] = useState('pairs')
   const [page, setPage] = useState(0)
   const [error, setError] = useState<string | null>(null)
+
+  // Debug: accuracy vs the repo's ground-truth file. Refreshes after decisions
+  // since confirming/dismissing changes the match set. Silently ignored if absent.
+  const refreshEval = useCallback(() => {
+    getEvaluation(sessionId).then(setEvalu).catch(() => setEvalu(null))
+  }, [sessionId])
 
   const load = useCallback(
     async (p = page) => {
       setError(null)
       try {
         setData(await getResults(sessionId, { matchClass: filter, page: p, pageSize: PAGE_SIZE }))
+        refreshEval()
       } catch (e) {
         setError((e as Error).message)
       }
     },
-    [sessionId, filter, page],
+    [sessionId, filter, page, refreshEval],
   )
 
   useEffect(() => {
@@ -64,9 +74,12 @@ export function ResultsStep({ sessionId, onReset }: Props) {
     <div>
       <div className="results-head">
         <h2>Results</h2>
-        <a className="btn btn-primary" href={downloadUrl(sessionId)}>
-          ⬇ Download CSV
-        </a>
+        <div className="head-right">
+          {evalu?.available && <EvalBox e={evalu} />}
+          <a className="btn btn-primary" href={downloadUrl(sessionId)}>
+            ⬇ Download CSV
+          </a>
+        </div>
       </div>
 
       {(c.review ?? 0) > 0 && (
@@ -276,6 +289,39 @@ function matchReason(pair: MatchPair): { icon: string; label: string; detail: st
     }
   }
   return base
+}
+
+// Debug-only accuracy panel comparing the match set to the repo's ground-truth file.
+function EvalBox({ e }: { e: Evaluation }) {
+  if (!e.applicable) {
+    return (
+      <div className="eval-box" title={e.reason ?? ''}>
+        <div className="eval-title">🧪 ground truth</div>
+        <div className="eval-na">no overlap</div>
+      </div>
+    )
+  }
+  const pct = (x: number) => `${Math.round(x * 100)}%`
+  return (
+    <div
+      className="eval-box"
+      title={`Confirmed matches scored against ground_truth_matches.csv.\nF1 ${pct(e.f1)} · precision ${pct(e.precision)} · recall ${pct(e.recall)}\n${e.tp} correct, ${e.fp} false, ${e.fn} missed of ${e.ground_truth_total} known matches.`}
+    >
+      <div className="eval-title">🧪 vs ground truth</div>
+      <div className="eval-score">
+        {pct(e.f1)} <span className="eval-metric">F1</span>
+      </div>
+      <div className="eval-sub">
+        <span>P {pct(e.precision)}</span>
+        <span>R {pct(e.recall)}</span>
+      </div>
+      <div className="eval-counts">
+        <span className="ok">✓{e.tp}</span>
+        <span className="bad">✗{e.fp}</span>
+        <span className="miss">⌀{e.fn}</span>
+      </div>
+    </div>
+  )
 }
 
 interface Segment {

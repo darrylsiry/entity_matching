@@ -105,10 +105,10 @@ def effective_frame(session_id: str) -> pd.DataFrame:
     matched_a = set(active["idx_a"].astype(int))
     matched_b = set(active["idx_b"].astype(int))
     unique = _unique_frame(sorted(all_a - matched_a), sorted(all_b - matched_b))
+    if unique.empty:
+        return active[_COLS].reset_index(drop=True)
     unique["decision"] = None
-
-    frame = pd.concat([active[_COLS], unique[_COLS]], ignore_index=True)
-    return frame
+    return pd.concat([active[_COLS], unique[_COLS]], ignore_index=True)
 
 
 def dismissed_frame(session_id: str) -> pd.DataFrame:

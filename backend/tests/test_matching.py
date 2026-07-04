@@ -230,3 +230,35 @@ def test_review_confirm_and_dismiss(monkeypatch):
     import pytest
     with pytest.raises(KeyError):
         review.set_decision(sid, 0, 0, "confirmed")  # 0,0 is an auto match, not review
+
+
+# ---- ground-truth evaluation (debug) ---------------------------------------
+
+def test_evaluation_precision_recall(monkeypatch):
+    import app.storage as storage
+    from app import evaluation
+
+    # A real ground-truth pair from the repo file + one fabricated false match.
+    raw_a = pd.DataFrame({"company_name": ["Willowbrook Technologies Co.", "Decoy A Inc"]})
+    raw_b = pd.DataFrame({"company_name": ["Willowbrook Technologies, Co.", "Decoy B Inc"]})
+    base = pd.DataFrame([
+        {"idx_a": 0, "idx_b": 0, "score": 0.99, "stage": "det", "rule": "r", "match_class": "match"},
+        {"idx_a": 1, "idx_b": 1, "score": 0.99, "stage": "det", "rule": "r", "match_class": "match"},
+    ])
+    meta = {"request": {"mode": "link", "file_id_a": "fa", "file_id_b": "fb",
+                        "mapping_a": {"name": "company_name"}, "mapping_b": {"name": "company_name"}}}
+
+    monkeypatch.setattr(storage, "load_session_meta", lambda sid: meta)
+    monkeypatch.setattr(storage, "load_result", lambda sid: base)
+    monkeypatch.setattr(storage, "load_decisions", lambda sid: {})
+    monkeypatch.setattr(storage, "load_upload", lambda fid: raw_a if fid == "fa" else raw_b)
+
+    if not evaluation.GROUND_TRUTH_PATH.exists():
+        pytest.skip("ground_truth_matches.csv not present")
+
+    r = evaluation.evaluate("s")
+    assert r["available"] and r["applicable"]
+    assert r["ground_truth_total"] == 200
+    assert r["tp"] == 1 and r["fp"] == 1          # Willowbrook correct, Decoy false
+    assert r["fn"] == r["ground_truth_total"] - 1
+    assert r["precision"] == 0.5

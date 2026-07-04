@@ -153,6 +153,24 @@ export async function getClusters(
   return jsonOrThrow(await fetch(`/api/session/${sessionId}/clusters?${p}`))
 }
 
+export interface Evaluation {
+  available: boolean
+  applicable: boolean
+  reason: string | null
+  precision: number
+  recall: number
+  f1: number
+  tp: number
+  fp: number
+  fn: number
+  ground_truth_total: number
+  predicted_total: number
+}
+
+export async function getEvaluation(sessionId: string): Promise<Evaluation> {
+  return jsonOrThrow(await fetch(`/api/session/${sessionId}/evaluation`))
+}
+
 export async function postDecision(
   sessionId: string,
   idxA: number,
