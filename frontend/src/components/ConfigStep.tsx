@@ -1,10 +1,19 @@
-import type { SessionConfig } from '../api'
+import { useState } from 'react'
+import type { FieldSpec, Mode, SessionConfig, UploadResponse } from '../api'
+import type { Mapping } from '../mapping'
+import { FieldMapper } from './FieldMapper'
 
 interface Props {
+  mode: Mode
   config: SessionConfig
   setConfig: (c: SessionConfig) => void
   onBack: () => void
   onNext: () => void
+  // Dedupe-only: lets the user confirm/adjust the auto-detected field mapping.
+  fields?: FieldSpec[]
+  upload?: UploadResponse | null
+  mapping?: Mapping
+  setMapping?: (m: Mapping) => void
 }
 
 const STAGES = [
@@ -25,7 +34,11 @@ const STAGES = [
   },
 ]
 
-export function ConfigStep({ config, setConfig, onBack, onNext }: Props) {
+export function ConfigStep({
+  mode, config, setConfig, onBack, onNext, fields, upload, mapping, setMapping,
+}: Props) {
+  const [showFields, setShowFields] = useState(false)
+
   function toggle(key: (typeof STAGES)[number]['key']) {
     setConfig({ ...config, [key]: !config[key] })
   }
@@ -35,6 +48,10 @@ export function ConfigStep({ config, setConfig, onBack, onNext }: Props) {
 
   const anyStage = config.use_deterministic || config.use_probabilistic || config.use_fuzzy
 
+  const canEditFields = Boolean(mode === 'dedupe' && fields && upload && mapping && setMapping)
+  const nameOk = mode !== 'dedupe' || Boolean(mapping?.['name'])
+  const canContinue = anyStage && nameOk
+
   return (
     <div>
       <h2>Configure matching</h2>
@@ -42,6 +59,17 @@ export function ConfigStep({ config, setConfig, onBack, onNext }: Props) {
         Records flow through these stages in series; each stage only sees what earlier
         ones didn&apos;t confidently resolve.
       </p>
+
+      {canEditFields && (
+        <DetectedFields
+          fields={fields!}
+          upload={upload!}
+          mapping={mapping!}
+          setMapping={setMapping!}
+          open={showFields}
+          onToggle={() => setShowFields((v) => !v)}
+        />
+      )}
 
       <div className="stage-list">
         {STAGES.map((s) => (
@@ -86,14 +114,61 @@ export function ConfigStep({ config, setConfig, onBack, onNext }: Props) {
       </div>
 
       {!anyStage && <div className="error">Enable at least one stage.</div>}
+      {!nameOk && (
+        <div className="error">
+          Company name isn&apos;t detected — open “Detected fields” above and pick the
+          name column to continue.
+        </div>
+      )}
       <div className="actions">
         <button className="btn btn-ghost" onClick={onBack}>
           ← Back
         </button>
-        <button className="btn btn-primary" disabled={!anyStage} onClick={onNext}>
+        <button className="btn btn-primary" disabled={!canContinue} onClick={onNext}>
           Next: run →
         </button>
       </div>
+    </div>
+  )
+}
+
+function DetectedFields({
+  fields, upload, mapping, setMapping, open, onToggle,
+}: {
+  fields: FieldSpec[]
+  upload: UploadResponse
+  mapping: Mapping
+  setMapping: (m: Mapping) => void
+  open: boolean
+  onToggle: () => void
+}) {
+  // One-line summary of what was auto-detected, e.g. "name → Company, domain → URL".
+  const detected = fields
+    .filter((f) => mapping[f.field])
+    .map((f) => `${f.label} → ${mapping[f.field]}`)
+
+  return (
+    <div className="detected">
+      <div className="detected-head">
+        <div>
+          <strong>Detected fields</strong>{' '}
+          <span className="muted small">
+            {detected.length ? detected.join(' · ') : 'none detected'}
+          </span>
+        </div>
+        <button className="btn btn-ghost btn-sm" onClick={onToggle}>
+          {open ? 'Done' : 'Adjust'}
+        </button>
+      </div>
+      {open && (
+        <div className="detected-body">
+          <p className="muted small">
+            We guessed these from your column names. Fix any that are wrong —{' '}
+            <strong>Company name</strong> is required; the rest improve accuracy.
+          </p>
+          <FieldMapper upload={upload} fields={fields} mapping={mapping} setMapping={setMapping} />
+        </div>
+      )}
     </div>
   )
 }

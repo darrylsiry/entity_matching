@@ -1,9 +1,13 @@
 """Stage 2 — probabilistic record linkage with Splink (Fellegi-Sunter, DuckDB backend).
 
-This is the workhorse for scale. Instead of comparing all A x B pairs it uses
-**blocking rules** (name tokens, postcode, domain) to generate only plausible
-candidate pairs, then scores each with a probabilistic model over multiple field
-comparisons (Jaro-Winkler name, exact domain, Levenshtein address, exact postcode).
+This is the workhorse for scale. Instead of comparing all candidate pairs it uses
+**blocking rules** (name tokens, postcode, domain) to generate only plausible pairs,
+then scores each with a probabilistic model over multiple field comparisons
+(Jaro-Winkler name, exact domain, Levenshtein address, exact postcode).
+
+Two entry points share one implementation:
+  - match_probabilistic(a, b)      link two files       (link_type="link_only")
+  - match_probabilistic_within(a)  dedupe one file      (link_type="dedupe_only")
 
 Model parameters are learned unsupervised: `u` from random sampling and `m` via
 expectation-maximisation. On very small or low-variety inputs EM can fail to
@@ -49,10 +53,43 @@ def match_probabilistic(
     b: pd.DataFrame,
     threshold: float = 0.75,
 ) -> pd.DataFrame:
-    """Return probabilistic cross-file pairs with match_probability >= threshold.
+    """Cross-file pairs (idx_a in A, idx_b in B) with match_probability >= threshold."""
+    return _run(
+        frames=[_prep(a), _prep(b)],
+        aliases=["a", "b"],
+        link_type="link_only",
+        has_signal=lambda col: _both_have(a, b, col),
+        threshold=threshold,
+        orient=_orient_link_only,
+    )
 
-    Never raises: on any error it logs and returns an empty frame.
-    """
+
+def match_probabilistic_within(
+    a: pd.DataFrame,
+    threshold: float = 0.75,
+) -> pd.DataFrame:
+    """Within-file pairs (both idx_a and idx_b index the same frame) for dedupe."""
+    return _run(
+        frames=[_prep(a)],
+        aliases=["a"],
+        link_type="dedupe_only",
+        has_signal=lambda col: _one_has(a, col),
+        threshold=threshold,
+        orient=_orient_dedupe,
+    )
+
+
+# ---- shared implementation -------------------------------------------------
+
+def _both_have(a: pd.DataFrame, b: pd.DataFrame, col: str) -> bool:
+    return col in a and col in b and (a[col] != "").any() and (b[col] != "").any()
+
+
+def _one_has(a: pd.DataFrame, col: str) -> bool:
+    return col in a and (a[col] != "").any()
+
+
+def _run(frames, aliases, link_type, has_signal, threshold, orient) -> pd.DataFrame:
     try:
         import splink.comparison_library as cl
         from splink import DuckDBAPI, Linker, SettingsCreator, block_on
@@ -61,42 +98,33 @@ def match_probabilistic(
         return _empty_pairs()
 
     try:
-        # Only block on / compare columns that actually carry signal in both frames.
+        # Only block on / compare columns that carry signal.
         blocking_rules = []
-        comparisons = []
-
-        def both_have(col: str) -> bool:
-            return (
-                col in a and col in b
-                and (a[col] != "").any() and (b[col] != "").any()
-            )
-
-        if both_have(NORM_NAME_TOKENS):
+        if has_signal(NORM_NAME_TOKENS):
             blocking_rules.append(block_on(NORM_NAME_TOKENS))
-        if both_have(_POSTCODE):
+        if has_signal(_POSTCODE):
             blocking_rules.append(block_on(_POSTCODE))
-        if both_have(NORM_DOMAIN):
+        if has_signal(NORM_DOMAIN):
             blocking_rules.append(block_on(NORM_DOMAIN))
         if not blocking_rules:
-            # Fall back to blocking on the first name token to stay tractable.
             blocking_rules.append(block_on(f"substr({_NAME}, 1, 4)"))
 
-        if both_have(_NAME):
+        comparisons = []
+        if has_signal(_NAME):
             comparisons.append(cl.JaroWinklerAtThresholds(_NAME, [0.9, 0.8]))
-        if both_have(NORM_DOMAIN):
+        if has_signal(NORM_DOMAIN):
             comparisons.append(cl.ExactMatch(NORM_DOMAIN))
-        if both_have(_ADDRESS):
+        if has_signal(_ADDRESS):
             comparisons.append(cl.LevenshteinAtThresholds(_ADDRESS, [2, 5]))
-        if both_have(_POSTCODE):
+        if has_signal(_POSTCODE):
             comparisons.append(cl.ExactMatch(_POSTCODE))
-        if both_have(_CITY):
+        if has_signal(_CITY):
             comparisons.append(cl.ExactMatch(_CITY))
-
         if not comparisons:
             return _empty_pairs()
 
         settings = SettingsCreator(
-            link_type="link_only",
+            link_type=link_type,
             blocking_rules_to_generate_predictions=blocking_rules,
             comparisons=comparisons,
             retain_intermediate_calculation_columns=False,
@@ -104,13 +132,9 @@ def match_probabilistic(
 
         db_api = DuckDBAPI()
         linker = Linker(
-            [_prep(a), _prep(b)],
-            settings,
-            db_api=db_api,
-            input_table_aliases=["a", "b"],
+            frames, settings, db_api=db_api, input_table_aliases=aliases
         )
 
-        # Unsupervised parameter estimation.
         linker.training.estimate_probability_two_random_records_match(
             blocking_rules, recall=0.7
         )
@@ -121,9 +145,7 @@ def match_probabilistic(
             except Exception as exc:  # EM can fail on a given rule; keep going.
                 logger.info("EM training skipped for a blocking rule: %s", exc)
 
-        predictions = linker.inference.predict(
-            threshold_match_probability=threshold
-        )
+        predictions = linker.inference.predict(threshold_match_probability=threshold)
         pred = predictions.as_pandas_dataframe()
     except Exception as exc:
         logger.warning("Probabilistic stage failed, falling back: %s", exc)
@@ -131,20 +153,33 @@ def match_probabilistic(
 
     if pred is None or pred.empty:
         return _empty_pairs()
+    return orient(pred)
 
-    # Map Splink's (source_dataset, unique_id) back to our A/B positional indices.
-    # link_only only produces cross-dataset pairs; normalize orientation to a=left.
+
+def _orient_link_only(pred: pd.DataFrame) -> pd.DataFrame:
+    """link_only produces cross-dataset pairs; normalize so idx_a is the 'a' side."""
     left_is_a = pred["source_dataset_l"] == "a"
     idx_a = pred["unique_id_l"].where(left_is_a, pred["unique_id_r"]).astype("int64")
     idx_b = pred["unique_id_r"].where(left_is_a, pred["unique_id_l"]).astype("int64")
+    return _pairs_frame(idx_a.values, idx_b.values, pred["match_probability"])
 
-    out = pd.DataFrame(
+
+def _orient_dedupe(pred: pd.DataFrame) -> pd.DataFrame:
+    """dedupe_only produces within-file pairs; both ids index the same frame."""
+    return _pairs_frame(
+        pred["unique_id_l"].astype("int64").values,
+        pred["unique_id_r"].astype("int64").values,
+        pred["match_probability"],
+    )
+
+
+def _pairs_frame(idx_a, idx_b, score) -> pd.DataFrame:
+    return pd.DataFrame(
         {
-            "idx_a": idx_a.values,
-            "idx_b": idx_b.values,
-            "score": pred["match_probability"].round(4).values,
+            "idx_a": idx_a,
+            "idx_b": idx_b,
+            "score": pd.Series(score).round(4).values,
             "stage": "probabilistic",
             "rule": "splink",
         }
-    )
-    return out.reset_index(drop=True)
+    ).reset_index(drop=True)

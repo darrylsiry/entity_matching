@@ -64,3 +64,23 @@ def match_deterministic(a: pd.DataFrame, b: pd.DataFrame) -> pd.DataFrame:
         return _empty_pairs()
     pairs = pd.concat(frames, ignore_index=True)
     return pairs.drop_duplicates(subset=["idx_a", "idx_b"], keep="first").reset_index(drop=True)
+
+
+def match_within(a: pd.DataFrame) -> pd.DataFrame:
+    """Deterministic pairs among rows of a single frame (for dedupe).
+
+    Rows sharing an exact registration id or domain are linked. Only i<j pairs are
+    emitted (no self-pairs, no mirror duplicates).
+    """
+    frames = []
+    for key, rule in _KEYS:
+        if key not in a:
+            continue
+        f = _exact_join(a, a, key, rule)
+        f = f[f["idx_a"] < f["idx_b"]]  # dedupe self-join: keep one direction
+        if not f.empty:
+            frames.append(f)
+    if not frames:
+        return _empty_pairs()
+    pairs = pd.concat(frames, ignore_index=True)
+    return pairs.drop_duplicates(subset=["idx_a", "idx_b"], keep="first").reset_index(drop=True)

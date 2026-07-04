@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from .matching.schema import CanonicalField
@@ -41,12 +43,13 @@ class SessionConfig(BaseModel):
 
 
 class CreateSessionRequest(BaseModel):
+    # "link" compares two files; "dedupe" finds duplicate rows within one file.
+    mode: Literal["link", "dedupe"] = "link"
     file_id_a: str
-    file_id_b: str
-    # Maps a canonical field to a source column name. Shared across both files;
-    # if a file uses different headers, map to the union — unmapped is fine.
     mapping_a: dict[CanonicalField, str]
-    mapping_b: dict[CanonicalField, str]
+    # Only used in "link" mode. In "dedupe" mode file A is the single input.
+    file_id_b: str | None = None
+    mapping_b: dict[CanonicalField, str] = Field(default_factory=dict)
     config: SessionConfig = Field(default_factory=SessionConfig)
 
 
@@ -81,3 +84,25 @@ class ResultsResponse(BaseModel):
     page_size: int
     counts: dict
     pairs: list[MatchPair]
+
+
+# ---- dedupe (single-file) results ------------------------------------------
+
+class ClusterMember(BaseModel):
+    row_idx: int
+    record: dict
+
+
+class ClusterOut(BaseModel):
+    master_id: int
+    size: int
+    members: list[ClusterMember]
+
+
+class ClustersResponse(BaseModel):
+    session_id: str
+    total: int          # number of clusters in the current filter
+    page: int
+    page_size: int
+    counts: dict
+    clusters: list[ClusterOut]

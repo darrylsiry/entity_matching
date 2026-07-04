@@ -1,11 +1,13 @@
 import { useState } from 'react'
-import { uploadFile, type UploadResponse } from '../api'
+import { uploadFile, type Mode, type UploadResponse } from '../api'
 
 interface Props {
+  mode: Mode
   uploadA: UploadResponse | null
   uploadB: UploadResponse | null
   onA: (u: UploadResponse) => void
   onB: (u: UploadResponse) => void
+  onBack: () => void
   onNext: () => void
 }
 
@@ -61,22 +63,28 @@ function DropZone({
   )
 }
 
-export function UploadStep({ uploadA, uploadB, onA, onB, onNext }: Props) {
+export function UploadStep({ mode, uploadA, uploadB, onA, onB, onBack, onNext }: Props) {
+  const dedupe = mode === 'dedupe'
+  const ready = dedupe ? Boolean(uploadA) : Boolean(uploadA && uploadB)
+
   return (
     <div>
-      <h2>Upload two files</h2>
+      <h2>{dedupe ? 'Upload your file' : 'Upload two files'}</h2>
       <p className="muted">
-        Each file should contain company records — one company per row. We&apos;ll match
-        entities in file A against file B.
+        {dedupe
+          ? 'One company per row. We’ll find rows that refer to the same company.'
+          : 'One company per row in each file. We’ll match records in file A against file B.'}
       </p>
-      <div className="upload-grid">
-        <DropZone label="File A" upload={uploadA} onUpload={onA} />
-        <DropZone label="File B" upload={uploadB} onUpload={onB} />
+      <div className={dedupe ? 'upload-grid single' : 'upload-grid'}>
+        <DropZone label={dedupe ? 'File' : 'File A'} upload={uploadA} onUpload={onA} />
+        {!dedupe && <DropZone label="File B" upload={uploadB} onUpload={onB} />}
       </div>
       <div className="actions">
-        <span />
-        <button className="btn btn-primary" disabled={!uploadA || !uploadB} onClick={onNext}>
-          Next: map columns →
+        <button className="btn btn-ghost" onClick={onBack}>
+          ← Back
+        </button>
+        <button className="btn btn-primary" disabled={!ready} onClick={onNext}>
+          {dedupe ? 'Next: configure →' : 'Next: map columns →'}
         </button>
       </div>
     </div>

@@ -13,6 +13,8 @@ from ..jobs import JobState, registry
 from ..matching.schema import FIELD_SPECS
 from ..matching.scoring import MATCH, REVIEW, UNIQUE_A, UNIQUE_B
 from ..models import (
+    ClusterOut,
+    ClustersResponse,
     ColumnInfo,
     CreateSessionRequest,
     CreateSessionResponse,
@@ -76,8 +78,14 @@ async def upload(file: UploadFile = File(...)) -> UploadResponse:
 
 @router.post("/session", response_model=CreateSessionResponse)
 def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
-    # Validate both files exist and the mappings reference real columns.
-    for fid, mapping in ((req.file_id_a, req.mapping_a), (req.file_id_b, req.mapping_b)):
+    # Which (file, mapping) pairs to validate depends on the mode.
+    to_check = [(req.file_id_a, req.mapping_a)]
+    if req.mode == "link":
+        if not req.file_id_b:
+            raise HTTPException(400, "link mode requires a second file (file_id_b)")
+        to_check.append((req.file_id_b, req.mapping_b))
+
+    for fid, mapping in to_check:
         try:
             meta = storage.upload_meta(fid)
         except FileNotFoundError as exc:
@@ -187,24 +195,93 @@ def _summary_counts(full: pd.DataFrame) -> dict:
     }
 
 
+def _session_mode(session_id: str) -> str:
+    try:
+        meta = storage.load_session_meta(session_id)
+    except FileNotFoundError:
+        return "link"
+    return meta.get("request", {}).get("mode", "link")
+
+
+@router.get("/session/{session_id}/clusters", response_model=ClustersResponse)
+def get_clusters(
+    session_id: str,
+    filter: str = Query("duplicates", description="duplicates|all|unique"),
+    page: int = Query(0, ge=0),
+    page_size: int = Query(25, ge=1, le=200),
+) -> ClustersResponse:
+    """Dedupe results: rows grouped into master-ID clusters."""
+    try:
+        rows = storage.load_result(session_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "no results yet") from exc
+    if "master_id" not in rows.columns:
+        raise HTTPException(400, "this session is not a dedupe session")
+
+    if filter == "duplicates":
+        rows = rows[rows["cluster_size"] > 1]
+    elif filter == "unique":
+        rows = rows[rows["cluster_size"] == 1]
+
+    # Order clusters largest-first so duplicates surface at the top.
+    master_order = (
+        rows.drop_duplicates("master_id")
+        .sort_values(["cluster_size", "master_id"], ascending=[False, True])["master_id"]
+        .tolist()
+    )
+    total = len(master_order)
+    page_ids = master_order[page * page_size : page * page_size + page_size]
+    page_rows = rows[rows["master_id"].isin(page_ids)]
+    # Preserve the largest-first ordering within the page.
+    page_rows = page_rows.assign(
+        _o=page_rows["master_id"].map({m: i for i, m in enumerate(page_ids)})
+    ).sort_values(["_o", "row_idx"])
+
+    clusters = service.build_clusters(session_id, page_rows)
+    return ClustersResponse(
+        session_id=session_id, total=total, page=page, page_size=page_size,
+        counts=_dedupe_counts(storage.load_result(session_id)),
+        clusters=[ClusterOut(**c) for c in clusters],
+    )
+
+
+def _dedupe_counts(rows: pd.DataFrame) -> dict:
+    if rows.empty:
+        return {"records": 0, "clusters": 0, "duplicate_rows": 0,
+                "duplicate_clusters": 0, "unique_rows": 0}
+    n_clusters = int(rows["master_id"].nunique())
+    dup_clusters = int(rows.loc[rows["cluster_size"] > 1, "master_id"].nunique())
+    return {
+        "records": int(len(rows)),
+        "clusters": n_clusters,
+        "duplicate_rows": int((rows["cluster_size"] > 1).sum()),
+        "duplicate_clusters": dup_clusters,
+        "unique_rows": n_clusters - dup_clusters,
+    }
+
+
 @router.get("/session/{session_id}/download")
 def download(session_id: str) -> StreamingResponse:
     try:
-        pairs = storage.load_result(session_id)
+        result = storage.load_result(session_id)
     except FileNotFoundError as exc:
         raise HTTPException(404, "no results yet") from exc
 
-    enriched = service.enrich_pairs(session_id, pairs)
-    rows = []
-    for p in enriched:
-        row = {
-            "score": p["score"], "match_class": p["match_class"], "stage": p["stage"],
-            "rule": p["rule"],
-        }
-        row.update({f"a_{k}": v for k, v in p["record_a"].items()})
-        row.update({f"b_{k}": v for k, v in p["record_b"].items()})
-        rows.append(row)
-    out = pd.DataFrame(rows)
+    if _session_mode(session_id) == "dedupe":
+        out = service.dedupe_download_frame(session_id, result)
+        filename = f"deduplicated_{session_id}.csv"
+    else:
+        rows = []
+        for p in service.enrich_pairs(session_id, result):
+            row = {
+                "score": p["score"], "match_class": p["match_class"],
+                "stage": p["stage"], "rule": p["rule"],
+            }
+            row.update({f"a_{k}": v for k, v in p["record_a"].items()})
+            row.update({f"b_{k}": v for k, v in p["record_b"].items()})
+            rows.append(row)
+        out = pd.DataFrame(rows)
+        filename = f"matches_{session_id}.csv"
 
     buf = io.StringIO()
     out.to_csv(buf, index=False)
@@ -212,5 +289,5 @@ def download(session_id: str) -> StreamingResponse:
     return StreamingResponse(
         iter([buf.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename=matches_{session_id}.csv"},
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
     )

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pandas as pd
 
-from app.matching import deterministic, fuzzy, normalize
+from app.matching import cluster, deterministic, fuzzy, normalize
+from app.matching.dedupe import run_dedupe
 from app.matching.pipeline import MatchConfig, run_pipeline
 from app.matching.schema import CanonicalField, norm_col, NORM_DOMAIN
 from app.matching.scoring import MATCH, REVIEW, Thresholds, combine_and_classify
@@ -139,3 +140,41 @@ def test_pipeline_end_to_end():
     frame = result.storage_frame()
     ua = frame[frame["match_class"] == "unique_a"]
     assert set(ua["idx_a"]) == {2} and set(ua["idx_b"]) == {-1}
+
+
+# ---- clustering ------------------------------------------------------------
+
+def test_union_find_connected_components():
+    # links 0-1 and 1-2 form one cluster; 3 is a singleton.
+    links = pd.DataFrame({"idx_a": [0, 1], "idx_b": [1, 2]})
+    out = cluster.assign_master_ids(4, links)
+    m = dict(zip(out["row_idx"], out["master_id"]))
+    assert m[0] == m[1] == m[2]
+    assert m[3] != m[0]
+    sizes = dict(zip(out["row_idx"], out["cluster_size"]))
+    assert sizes[0] == 3 and sizes[3] == 1
+
+
+# ---- single-file dedupe ----------------------------------------------------
+
+def test_dedupe_clusters_duplicates():
+    mapping = {CanonicalField.NAME: "name", CanonicalField.REGISTRATION_ID: "ein"}
+    df = pd.DataFrame([
+        {"name": "Acme, Inc.", "ein": "12-3456789"},      # 0 \
+        {"name": "ACME INCORPORATED", "ein": "123456789"}, # 1 / same via reg id
+        {"name": "Globex Corporation", "ein": ""},         # 2 \
+        {"name": "Globex Corp", "ein": ""},                # 3 / same via fuzzy name
+        {"name": "Wayne Enterprises", "ein": ""},          # 4  unique
+    ])
+    result = run_dedupe(df, mapping, MatchConfig(use_probabilistic=False))
+    m = dict(zip(result.clusters["row_idx"], result.clusters["master_id"]))
+    assert m[0] == m[1]           # Acme duplicates share a master id
+    assert m[2] == m[3]           # Globex duplicates share a master id
+    assert len({m[0], m[2], m[4]}) == 3   # three distinct entities
+
+    c = result.counts
+    assert c["records"] == 5
+    assert c["clusters"] == 3
+    assert c["duplicate_rows"] == 4
+    assert c["duplicate_clusters"] == 2
+    assert c["unique_rows"] == 1

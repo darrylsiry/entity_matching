@@ -2,19 +2,26 @@ import { useEffect, useState } from 'react'
 import {
   getFields,
   type FieldSpec,
+  type Mode,
   type SessionConfig,
   type UploadResponse,
 } from './api'
+import { autoMap, type Mapping } from './mapping'
+import { ModeStep } from './components/ModeStep'
 import { UploadStep } from './components/UploadStep'
 import { ColumnMapStep } from './components/ColumnMapStep'
 import { ConfigStep } from './components/ConfigStep'
 import { RunStep } from './components/RunStep'
 import { ResultsStep } from './components/ResultsStep'
+import { DedupeResultsStep } from './components/DedupeResultsStep'
 import './App.css'
 
-export type Mapping = Record<string, string>
+export type { Mapping } from './mapping'
 
-const STEPS = ['Upload', 'Map columns', 'Configure', 'Run', 'Results'] as const
+const STEPS: Record<Mode, string[]> = {
+  link: ['Mode', 'Upload', 'Map columns', 'Configure', 'Run', 'Results'],
+  dedupe: ['Mode', 'Upload', 'Configure', 'Run', 'Results'],
+}
 
 const DEFAULT_CONFIG: SessionConfig = {
   use_deterministic: true,
@@ -26,6 +33,7 @@ const DEFAULT_CONFIG: SessionConfig = {
 }
 
 export default function App() {
+  const [mode, setMode] = useState<Mode>('link')
   const [step, setStep] = useState(0)
   const [fields, setFields] = useState<FieldSpec[]>([])
 
@@ -40,6 +48,9 @@ export default function App() {
     getFields().then(setFields).catch(() => setFields([]))
   }, [])
 
+  const steps = STEPS[mode]
+  const current = steps[step]
+
   function reset() {
     setUploadA(null)
     setUploadB(null)
@@ -50,15 +61,32 @@ export default function App() {
     setStep(0)
   }
 
+  const go = (label: string) => setStep(Math.max(0, steps.indexOf(label)))
+
+  function chooseMode(m: Mode) {
+    setMode(m)
+    setStep(1) // -> Upload
+  }
+
+  // Leaving Upload: dedupe auto-maps its single file and skips column mapping.
+  function afterUpload() {
+    if (mode === 'dedupe' && uploadA) {
+      setMappingA(autoMap(fields, uploadA))
+      go('Configure')
+    } else {
+      go('Map columns')
+    }
+  }
+
   return (
     <div className="app">
       <header className="app-header">
         <h1>Entity Matching</h1>
-        <p>Match identical company records across two files.</p>
+        <p>Find identical company records — across two files or within one.</p>
       </header>
 
       <ol className="stepper">
-        {STEPS.map((label, i) => (
+        {steps.map((label, i) => (
           <li
             key={label}
             className={`step ${i === step ? 'active' : ''} ${i < step ? 'done' : ''}`}
@@ -70,16 +98,21 @@ export default function App() {
       </ol>
 
       <main className="panel">
-        {step === 0 && (
+        {current === 'Mode' && <ModeStep mode={mode} onChoose={chooseMode} />}
+
+        {current === 'Upload' && (
           <UploadStep
+            mode={mode}
             uploadA={uploadA}
             uploadB={uploadB}
             onA={setUploadA}
             onB={setUploadB}
-            onNext={() => setStep(1)}
+            onBack={() => go('Mode')}
+            onNext={afterUpload}
           />
         )}
-        {step === 1 && uploadA && uploadB && (
+
+        {current === 'Map columns' && uploadA && uploadB && (
           <ColumnMapStep
             fields={fields}
             uploadA={uploadA}
@@ -88,20 +121,28 @@ export default function App() {
             mappingB={mappingB}
             setMappingA={setMappingA}
             setMappingB={setMappingB}
-            onBack={() => setStep(0)}
-            onNext={() => setStep(2)}
+            onBack={() => go('Upload')}
+            onNext={() => go('Configure')}
           />
         )}
-        {step === 2 && (
+
+        {current === 'Configure' && (
           <ConfigStep
+            mode={mode}
             config={config}
             setConfig={setConfig}
-            onBack={() => setStep(1)}
-            onNext={() => setStep(3)}
+            fields={fields}
+            upload={uploadA}
+            mapping={mappingA}
+            setMapping={setMappingA}
+            onBack={() => go(mode === 'dedupe' ? 'Upload' : 'Map columns')}
+            onNext={() => go('Run')}
           />
         )}
-        {step === 3 && uploadA && uploadB && (
+
+        {current === 'Run' && uploadA && (
           <RunStep
+            mode={mode}
             uploadA={uploadA}
             uploadB={uploadB}
             mappingA={mappingA}
@@ -109,12 +150,16 @@ export default function App() {
             config={config}
             sessionId={sessionId}
             setSessionId={setSessionId}
-            onBack={() => setStep(2)}
-            onDone={() => setStep(4)}
+            onBack={() => go('Configure')}
+            onDone={() => go('Results')}
           />
         )}
-        {step === 4 && sessionId && (
+
+        {current === 'Results' && sessionId && mode === 'link' && (
           <ResultsStep sessionId={sessionId} onReset={reset} />
+        )}
+        {current === 'Results' && sessionId && mode === 'dedupe' && (
+          <DedupeResultsStep sessionId={sessionId} onReset={reset} />
         )}
       </main>
     </div>

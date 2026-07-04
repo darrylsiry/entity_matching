@@ -1,14 +1,23 @@
 # Entity Matching
 
-Upload two files of company records and find identical entities across them. Matching
-runs through a **cascade of open-source techniques in series**, strongest signal first,
-so it scales to 100k+ records per file without comparing every possible pair.
+Find identical company entities two ways:
+
+- **Compare two files** (linkage) — match records in file A against file B. Output:
+  matched pairs, with unmatched records flagged so counts reconcile per file.
+- **Deduplicate one file** — cluster duplicate rows within a single file and give each
+  row a **master ID** (rows sharing an ID are the same company). Key fields are
+  auto-detected (a collapsible "Detected fields" panel on the Configure step lets you
+  confirm or correct them). Output: your file annotated with a `master_id` column.
+
+Both paths run the same **cascade of open-source techniques in series**,
+strongest-signal-first, so it scales to 100k+ records without comparing every possible
+pair. Only what gets compared differs (A↔B vs rows within one file) and the output shape.
 
 ## How matching works — the cascade
 
-Both files are normalized into one canonical schema, then records flow through stages.
-Anything an early stage confidently resolves is removed from the pool the later,
-more expensive stages have to consider.
+Records are normalized into one canonical schema, then flow through stages. Anything an
+early stage confidently resolves is removed from the pool the later, more expensive
+stages consider.
 
 | Stage | Technique | Library | Signal |
 |-------|-----------|---------|--------|
@@ -16,7 +25,7 @@ more expensive stages have to consider.
 | 1 · Deterministic | Exact match on registration/tax ID, then website domain | pandas | Near-certain |
 | 2 · Probabilistic | Fellegi–Sunter linkage with **blocking** + fuzzy field comparisons (Jaro-Winkler name, exact domain, Levenshtein address, exact postcode) | **Splink** (DuckDB) | Scored 0–1 |
 | 3 · Fuzzy fallback | Blocked token-set name similarity for leftovers | `rapidfuzz` | Scored 0–1 |
-| 4 · Classify | Best match per record → **Match / Review / No-match** by threshold | pandas | — |
+| 4 · Resolve | Two-file: best match per record → **Match / Review / No-match**. One-file: union all links → **connected components → master ID** per row | pandas | — |
 
 **Blocking** is what makes 100k×100k tractable: instead of 10¹⁰ comparisons, records are
 only compared when they share a signal (a name-token prefix, a postcode, a domain).
@@ -25,11 +34,12 @@ only compared when they share a signal (a name-token prefix, a postcode, a domai
 
 ```
 backend/            FastAPI app + matching pipeline (Python)
-  app/matching/     normalize, deterministic, probabilistic, fuzzy, scoring, pipeline
+  app/matching/     normalize, deterministic, probabilistic, fuzzy, scoring,
+                    pipeline (two-file), cluster + dedupe (single-file)
   app/api/routes.py HTTP endpoints
   tests/            pytest unit tests
 frontend/           Vite + React + TypeScript wizard UI
-sample_data/        generator for two demo files with known overlaps
+sample_data/        generator: two files with overlaps + one file with duplicates
 ```
 
 ## Prerequisites
@@ -61,13 +71,14 @@ automatically.
 
 Prefer separate terminals? `make backend` and `make frontend` run each side alone.
 
-**Demo data** — two files with deliberate name/format/ID variations (7 known matches):
+**Demo data** — deliberate name/format/ID variations:
 
 ```bash
-make sample       # -> sample_data/file_a.csv, file_b.csv
+make sample       # -> file_a.csv + file_b.csv (7 matches), file_dedupe.csv (12 rows → 7 entities)
 ```
 
-Upload those two files, accept the auto-guessed column mapping, and run.
+For two-file mode, upload `file_a.csv` + `file_b.csv` and accept the auto-guessed
+mapping. For dedupe mode, upload `file_dedupe.csv`.
 
 ## Deploy
 
@@ -90,11 +101,12 @@ cd backend && .venv/bin/pytest -q
 | Method | Path | Purpose |
 |--------|------|---------|
 | POST | `/api/upload` | Upload a CSV/XLSX; returns `file_id` + detected columns |
-| POST | `/api/session` | Pair two files + column mappings + config |
+| POST | `/api/session` | Create a session: `mode` (`link`\|`dedupe`) + file(s) + mappings + config |
 | POST | `/api/session/{id}/run` | Start matching (async background job) |
 | GET | `/api/session/{id}/status` | Poll `{state, stage, progress, counts}` |
-| GET | `/api/session/{id}/results` | Paginated match pairs (`?match_class=&page=`) |
-| GET | `/api/session/{id}/download` | Full results as CSV |
+| GET | `/api/session/{id}/results` | *link mode:* paginated match pairs (`?match_class=&page=`) |
+| GET | `/api/session/{id}/clusters` | *dedupe mode:* master-ID clusters (`?filter=&page=`) |
+| GET | `/api/session/{id}/download` | Results as CSV (matched pairs, or original file + `master_id`) |
 
 ## Notes / next steps
 

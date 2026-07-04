@@ -3,15 +3,17 @@ import {
   createSession,
   getStatus,
   runSession,
+  type Mode,
   type SessionConfig,
   type StatusResponse,
   type UploadResponse,
 } from '../api'
-import type { Mapping } from '../App'
+import type { Mapping } from '../mapping'
 
 interface Props {
+  mode: Mode
   uploadA: UploadResponse
-  uploadB: UploadResponse
+  uploadB: UploadResponse | null
   mappingA: Mapping
   mappingB: Mapping
   config: SessionConfig
@@ -22,6 +24,7 @@ interface Props {
 }
 
 export function RunStep(props: Props) {
+  const dedupe = props.mode === 'dedupe'
   const [status, setStatus] = useState<StatusResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [started, setStarted] = useState(false)
@@ -32,10 +35,11 @@ export function RunStep(props: Props) {
     setStarted(true)
     try {
       const { session_id } = await createSession({
+        mode: props.mode,
         file_id_a: props.uploadA.file_id,
-        file_id_b: props.uploadB.file_id,
         mapping_a: props.mappingA,
-        mapping_b: props.mappingB,
+        file_id_b: dedupe ? null : props.uploadB?.file_id,
+        mapping_b: dedupe ? {} : props.mappingB,
         config: props.config,
       })
       props.setSessionId(session_id)
@@ -74,16 +78,17 @@ export function RunStep(props: Props) {
 
   return (
     <div>
-      <h2>Run matching</h2>
+      <h2>{dedupe ? 'Run deduplication' : 'Run matching'}</h2>
       <p className="muted">
-        Matching {props.uploadA.rows.toLocaleString()} × {props.uploadB.rows.toLocaleString()} records
-        through the selected stages.
+        {dedupe
+          ? `Scanning ${props.uploadA.rows.toLocaleString()} rows for duplicates through the selected stages.`
+          : `Matching ${props.uploadA.rows.toLocaleString()} × ${(props.uploadB?.rows ?? 0).toLocaleString()} records through the selected stages.`}
       </p>
 
       {!started ? (
         <div className="run-cta">
           <button className="btn btn-primary btn-lg" onClick={start}>
-            ▶ Start matching
+            ▶ {dedupe ? 'Start deduplication' : 'Start matching'}
           </button>
         </div>
       ) : (
@@ -97,10 +102,21 @@ export function RunStep(props: Props) {
           </div>
           {done && status && (
             <div className="counts">
-              <Count label="Matches" value={status.counts.match} tone="match" />
-              <Count label="Review" value={status.counts.review} tone="review" />
-              <Count label="Records A" value={status.counts.records_a} />
-              <Count label="Records B" value={status.counts.records_b} />
+              {dedupe ? (
+                <>
+                  <Count label="Rows" value={status.counts.records} />
+                  <Count label="Entities" value={status.counts.clusters} tone="match" />
+                  <Count label="Duplicate rows" value={status.counts.duplicate_rows} tone="review" />
+                  <Count label="Dup. groups" value={status.counts.duplicate_clusters} />
+                </>
+              ) : (
+                <>
+                  <Count label="Matches" value={status.counts.match} tone="match" />
+                  <Count label="Review" value={status.counts.review} tone="review" />
+                  <Count label="Records A" value={status.counts.records_a} />
+                  <Count label="Records B" value={status.counts.records_b} />
+                </>
+              )}
             </div>
           )}
         </div>

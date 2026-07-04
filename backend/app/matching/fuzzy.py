@@ -96,3 +96,56 @@ def match_fuzzy(
     if not rows:
         return _empty_pairs()
     return pd.DataFrame(rows)
+
+
+def match_fuzzy_within(
+    a: pd.DataFrame,
+    threshold: float = 0.80,
+    exclude: set[int] | None = None,
+) -> pd.DataFrame:
+    """Blocked fuzzy name matching among rows of a single frame (for dedupe).
+
+    Emits every i<j pair whose name similarity is >= threshold (not just best-per-row),
+    so multi-row duplicate clusters are fully linked. `exclude` skips rows already
+    resolved deterministically.
+    """
+    exclude = exclude or set()
+    use = a.loc[(a[_NAME] != "") & (~a.index.isin(exclude))]
+    if len(use) < 2:
+        return _empty_pairs()
+
+    blocks: dict[str, list[int]] = {}
+    for idx, name in use[_NAME].items():
+        for key in _block_keys(name):
+            blocks.setdefault(key, []).append(idx)
+
+    has_city = _CITY in use
+    has_pc = _POSTCODE in use
+
+    seen: set[tuple[int, int]] = set()
+    rows: list[dict] = []
+    for idx_i, row_i in use.iterrows():
+        name_i = row_i[_NAME]
+        candidates = {
+            j for key in _block_keys(name_i) for j in blocks.get(key, ()) if j != idx_i
+        }
+        for idx_j in candidates:
+            lo, hi = (idx_i, idx_j) if idx_i < idx_j else (idx_j, idx_i)
+            if (lo, hi) in seen:
+                continue
+            seen.add((lo, hi))
+            row_j = use.loc[idx_j]
+            score = fuzz.token_set_ratio(name_i, row_j[_NAME]) / 100.0
+            if has_city and row_i[_CITY] and row_i[_CITY] == row_j[_CITY]:
+                score = min(1.0, score + 0.05)
+            if has_pc and row_i[_POSTCODE] and row_i[_POSTCODE] == row_j[_POSTCODE]:
+                score = min(1.0, score + 0.05)
+            if score >= threshold:
+                rows.append(
+                    {"idx_a": lo, "idx_b": hi, "score": round(score, 4),
+                     "stage": "fuzzy", "rule": "name_token_set"}
+                )
+
+    if not rows:
+        return _empty_pairs()
+    return pd.DataFrame(rows)

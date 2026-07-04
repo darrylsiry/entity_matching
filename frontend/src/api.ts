@@ -58,6 +58,28 @@ export interface ResultsResponse {
   pairs: MatchPair[]
 }
 
+export type Mode = 'link' | 'dedupe'
+
+export interface ClusterMember {
+  row_idx: number
+  record: Record<string, string>
+}
+
+export interface Cluster {
+  master_id: number
+  size: number
+  members: ClusterMember[]
+}
+
+export interface ClustersResponse {
+  session_id: string
+  total: number
+  page: number
+  page_size: number
+  counts: Record<string, number>
+  clusters: Cluster[]
+}
+
 async function jsonOrThrow<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let detail = res.statusText
@@ -82,10 +104,11 @@ export async function uploadFile(file: File): Promise<UploadResponse> {
 }
 
 export async function createSession(body: {
+  mode: Mode
   file_id_a: string
-  file_id_b: string
   mapping_a: Record<string, string>
-  mapping_b: Record<string, string>
+  file_id_b?: string | null
+  mapping_b?: Record<string, string>
   config: SessionConfig
 }): Promise<{ session_id: string }> {
   return jsonOrThrow(
@@ -114,6 +137,17 @@ export async function getResults(
   p.set('page', String(opts.page ?? 0))
   p.set('page_size', String(opts.pageSize ?? 50))
   return jsonOrThrow(await fetch(`/api/session/${sessionId}/results?${p}`))
+}
+
+export async function getClusters(
+  sessionId: string,
+  opts: { filter?: string; page?: number; pageSize?: number } = {},
+): Promise<ClustersResponse> {
+  const p = new URLSearchParams()
+  if (opts.filter) p.set('filter', opts.filter)
+  p.set('page', String(opts.page ?? 0))
+  p.set('page_size', String(opts.pageSize ?? 25))
+  return jsonOrThrow(await fetch(`/api/session/${sessionId}/clusters?${p}`))
 }
 
 export function downloadUrl(sessionId: string): string {
