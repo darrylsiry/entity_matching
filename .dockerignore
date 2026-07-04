@@ -1,0 +1,14 @@
+# Keep the build context small and reproducible.
+**/.venv
+**/node_modules
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+backend/data
+frontend/dist
+sample_data/file_a.csv
+sample_data/file_b.csv
+.git
+.gitignore
+*.md
+.claude

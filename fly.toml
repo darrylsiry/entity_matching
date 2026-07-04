@@ -1,0 +1,37 @@
+# Fly.io configuration. Change `app` to a unique name (or let `fly launch` set it),
+# then: fly volumes create em_data --size 1 && fly deploy
+app = "entity-matching"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  ENTITY_MATCHING_DATA_DIR = "/data"
+  FRONTEND_DIST = "/app/static"
+
+# Persist uploads + match results across restarts/redeploys.
+[mounts]
+  source = "em_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Keep one machine running: the job registry is in-memory and results live on the
+  # machine's volume, so requests in a session must reach the same instance.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "2s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/health"
+
+# Splink + DuckDB + pandas need real memory for 100k-row files. Tune as needed.
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "2gb"

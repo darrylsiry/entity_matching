@@ -39,35 +39,45 @@ sample_data/        generator for two demo files with known overlaps
 
 ## Run it
 
-**1. Backend** (terminal 1):
+**One-time setup** — create the backend venv and install all deps:
 
 ```bash
-cd backend
-python3.11 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-.venv/bin/uvicorn app.main:app --port 8000 --reload
+make install
+# equivalent to:
+#   cd backend && python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt
+#   cd frontend && npm install
 ```
 
-**2. Frontend** (terminal 2):
+**Start the app** — backend + frontend together, Ctrl+C stops both:
 
 ```bash
-cd frontend
-npm install
-npm run dev            # http://localhost:5173
+make dev          # or: ./dev.sh
 ```
 
-The Vite dev server proxies `/api` to the backend on `:8000`, so open
-<http://localhost:5173> and use the 5-step wizard: **Upload → Map columns → Configure →
-Run → Results** (with CSV export).
+Then open <http://localhost:5173> and use the 5-step wizard: **Upload → Map columns →
+Configure → Run → Results** (with CSV export). The Vite dev server proxies `/api` to the
+backend on `:8000`, and the backend runs with `--reload` so code edits restart it
+automatically.
 
-**3. Demo data** — generate two files with deliberate name/format/ID variations:
+Prefer separate terminals? `make backend` and `make frontend` run each side alone.
+
+**Demo data** — two files with deliberate name/format/ID variations (7 known matches):
 
 ```bash
-backend/.venv/bin/python sample_data/generate.py
-# -> sample_data/file_a.csv, file_b.csv  (7 known matches)
+make sample       # -> sample_data/file_a.csv, file_b.csv
 ```
 
 Upload those two files, accept the auto-guessed column mapping, and run.
+
+## Deploy
+
+The app ships as a single Docker image (frontend built in, served same-origin with the
+API). See **[DEPLOY.md](DEPLOY.md)** for Fly.io steps. Quick local check:
+
+```bash
+docker build -t entity-matching .
+docker run -p 8080:8080 entity-matching   # -> http://localhost:8080
+```
 
 ## Tests
 

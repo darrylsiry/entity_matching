@@ -28,12 +28,17 @@ if lsof -ti ":$BACKEND_PORT" >/dev/null 2>&1; then
 fi
 
 # --- launch ------------------------------------------------------------------
+# Enable job control so each background job becomes its own process group leader
+# (PGID == PID). That lets us kill the *whole* group on shutdown — important
+# because `npm run dev` spawns Vite as a grandchild that a plain kill would orphan.
+set -m
+
 pids=()
 cleanup() {
   echo ""
   echo "• Shutting down…"
   for pid in "${pids[@]}"; do
-    kill "$pid" 2>/dev/null || true
+    kill -TERM -"$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
   done
   wait 2>/dev/null || true
 }
@@ -51,4 +56,10 @@ echo ""
 echo "Open http://localhost:$FRONTEND_PORT  (Ctrl+C to stop both)"
 
 # Exit as soon as either process dies, so a crash doesn't leave a half-running app.
-wait -n
+# (Portable to macOS's bash 3.2, which lacks `wait -n`.)
+while true; do
+  for pid in "${pids[@]}"; do
+    kill -0 "$pid" 2>/dev/null || exit 0
+  done
+  sleep 1
+done
