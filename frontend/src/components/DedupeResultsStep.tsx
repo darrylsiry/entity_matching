@@ -1,5 +1,13 @@
-import { useEffect, useState } from 'react'
-import { downloadUrl, getClusters, type Cluster, type ClustersResponse } from '../api'
+import { useCallback, useEffect, useState } from 'react'
+import {
+  downloadUrl,
+  getCandidates,
+  getClusters,
+  postDecision,
+  type Cluster,
+  type Decision,
+  type DedupeCandidate,
+} from '../api'
 
 interface Props {
   sessionId: string
@@ -7,27 +15,68 @@ interface Props {
 }
 
 const PAGE_SIZE = 25
-const FILTERS = [
+// Cluster filters + the possible-duplicates review queue (key "possible").
+const TABS = [
   { key: 'duplicates', label: 'Duplicate groups' },
   { key: 'all', label: 'All' },
   { key: 'unique', label: 'Unique' },
+  { key: 'possible', label: 'Possible duplicates', count: 'possible_duplicates' },
+]
+const CAND_FILTERS = [
+  { key: 'pending', label: 'To review' },
+  { key: 'confirmed', label: 'Confirmed' },
+  { key: 'dismissed', label: 'Dismissed' },
 ]
 
 export function DedupeResultsStep({ sessionId, onReset }: Props) {
-  const [data, setData] = useState<ClustersResponse | null>(null)
-  const [filter, setFilter] = useState('duplicates')
+  const [counts, setCounts] = useState<Record<string, number>>({})
+  const [clusters, setClusters] = useState<Cluster[]>([])
+  const [candidates, setCandidates] = useState<DedupeCandidate[]>([])
+  const [total, setTotal] = useState(0)
+  const [tab, setTab] = useState('duplicates')
+  const [candFilter, setCandFilter] = useState('pending')
   const [page, setPage] = useState(0)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    setError(null)
-    getClusters(sessionId, { filter, page, pageSize: PAGE_SIZE })
-      .then(setData)
-      .catch((e) => setError((e as Error).message))
-  }, [sessionId, filter, page])
+  const load = useCallback(
+    async (p = page) => {
+      setError(null)
+      try {
+        if (tab === 'possible') {
+          const r = await getCandidates(sessionId, { filter: candFilter, page: p, pageSize: PAGE_SIZE })
+          setCandidates(r.candidates)
+          setTotal(r.total)
+          setCounts(r.counts)
+        } else {
+          const r = await getClusters(sessionId, { filter: tab, page: p, pageSize: PAGE_SIZE })
+          setClusters(r.clusters)
+          setTotal(r.total)
+          setCounts(r.counts)
+        }
+      } catch (e) {
+        setError((e as Error).message)
+      }
+    },
+    [sessionId, tab, candFilter, page],
+  )
 
-  const c = data?.counts ?? {}
-  const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 0
+  useEffect(() => {
+    load(page)
+  }, [load, page])
+
+  async function decide(cand: DedupeCandidate, decision: Decision) {
+    try {
+      await postDecision(sessionId, cand.idx_a, cand.idx_b, decision)
+      const remaining = candidates.length - 1
+      if (remaining === 0 && page > 0) setPage((x) => x - 1)
+      else await load(page)
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+
+  const totalPages = Math.ceil(total / PAGE_SIZE)
+  const onPossible = tab === 'possible'
 
   return (
     <div>
@@ -40,38 +89,88 @@ export function DedupeResultsStep({ sessionId, onReset }: Props) {
 
       <p className="muted small">
         Every row was assigned a <strong>master ID</strong>; rows sharing an ID are the
-        same company. The CSV is your original file with <code>master_id</code> and{' '}
-        <code>cluster_size</code> columns added.
+        same company. Only confident duplicates are merged automatically — borderline
+        pairs go to <strong>Possible duplicates</strong> for you to confirm or dismiss.
+        The CSV is your original file with <code>master_id</code> and{' '}
+        <code>cluster_size</code> columns added (reflecting your decisions).
       </p>
 
+      {(counts.possible_duplicates ?? 0) > 0 && !onPossible && (
+        <p className="muted small review-hint">
+          {counts.possible_duplicates} possible duplicate
+          {counts.possible_duplicates === 1 ? '' : 's'} to review — open the{' '}
+          <strong>Possible duplicates</strong> tab. Confirming one merges the rows into a
+          single master ID.
+        </p>
+      )}
+
       <div className="summary-row">
-        <Chip label="Rows" value={c.records} />
-        <Chip label="Unique entities" value={c.clusters} tone="match" />
-        <Chip label="Duplicate rows" value={c.duplicate_rows} tone="review" />
-        <Chip label="Duplicate groups" value={c.duplicate_clusters} />
+        <Chip label="Rows" value={counts.records} />
+        <Chip label="Unique entities" value={counts.clusters} tone="match" />
+        <Chip label="Duplicate rows" value={counts.duplicate_rows} tone="review" />
+        <Chip label="Possible duplicates" value={counts.possible_duplicates} />
       </div>
 
       <div className="filter-tabs">
-        {FILTERS.map((f) => (
+        {TABS.map((t) => (
           <button
-            key={f.key}
-            className={`tab ${filter === f.key ? 'active' : ''}`}
+            key={t.key}
+            className={`tab ${tab === t.key ? 'active' : ''}`}
             onClick={() => {
-              setFilter(f.key)
+              setTab(t.key)
               setPage(0)
             }}
           >
-            {f.label}
+            {t.label}
+            {t.count && <span className="tab-count">{counts[t.count] ?? 0}</span>}
           </button>
         ))}
       </div>
 
-      {error && <div className="error">{error}</div>}
-      {data && data.clusters.length === 0 && <p className="muted">No groups in this view.</p>}
+      {onPossible && (
+        <div className="filter-tabs sub">
+          {CAND_FILTERS.map((f) => (
+            <button
+              key={f.key}
+              className={`tab ${candFilter === f.key ? 'active' : ''}`}
+              onClick={() => {
+                setCandFilter(f.key)
+                setPage(0)
+              }}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+      )}
 
-      <div className="pair-list">
-        {data?.clusters.map((cl) => <ClusterCard key={cl.master_id} cluster={cl} />)}
-      </div>
+      {error && <div className="error">{error}</div>}
+
+      {onPossible ? (
+        <>
+          {candidates.length === 0 && (
+            <p className="muted">No possible duplicates in this view.</p>
+          )}
+          <div className="pair-list">
+            {candidates.map((cand) => (
+              <CandidateCard
+                key={`${cand.idx_a}-${cand.idx_b}`}
+                cand={cand}
+                onDecide={decide}
+              />
+            ))}
+          </div>
+        </>
+      ) : (
+        <>
+          {clusters.length === 0 && <p className="muted">No groups in this view.</p>}
+          <div className="pair-list">
+            {clusters.map((cl) => (
+              <ClusterCard key={cl.master_id} cluster={cl} />
+            ))}
+          </div>
+        </>
+      )}
 
       {totalPages > 1 && (
         <div className="pager">
@@ -101,12 +200,71 @@ export function DedupeResultsStep({ sessionId, onReset }: Props) {
   )
 }
 
+function CandidateCard({
+  cand,
+  onDecide,
+}: {
+  cand: DedupeCandidate
+  onDecide: (c: DedupeCandidate, d: Decision) => void
+}) {
+  const keys = Array.from(new Set([...Object.keys(cand.record_a), ...Object.keys(cand.record_b)]))
+  const decided = cand.decision === 'confirmed' || cand.decision === 'dismissed'
+  return (
+    <div className={`pair-card ${cand.decision === 'confirmed' ? 'match' : 'review'}`}>
+      <div className="pair-meta">
+        <span className="badge review">possible duplicate</span>
+        {cand.decision === 'confirmed' && <span className="badge confirmed">✓ merged</span>}
+        {cand.decision === 'dismissed' && <span className="badge dismissed">dismissed</span>}
+        <span className="score">{(cand.score * 100).toFixed(0)}%</span>
+        {cand.stage && <span className="stage-tag">{cand.stage}</span>}
+        <span className="pair-actions">
+          {!decided && (
+            <>
+              <button className="btn btn-sm btn-confirm" onClick={() => onDecide(cand, 'confirmed')}>
+                ✓ Same company
+              </button>
+              <button className="btn btn-sm btn-dismiss" onClick={() => onDecide(cand, 'dismissed')}>
+                ✕ Not a match
+              </button>
+            </>
+          )}
+          {decided && (
+            <button className="btn btn-sm btn-ghost" onClick={() => onDecide(cand, 'pending')}>
+              ↺ Undo
+            </button>
+          )}
+        </span>
+      </div>
+      <table className="pair-table">
+        <thead>
+          <tr>
+            <th>Field</th>
+            <th>row {cand.idx_a}</th>
+            <th>row {cand.idx_b}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {keys.map((k) => {
+            const a = cand.record_a[k] ?? ''
+            const b = cand.record_b[k] ?? ''
+            const diff = a.trim().toLowerCase() !== b.trim().toLowerCase()
+            return (
+              <tr key={k} className={diff ? 'diff' : ''}>
+                <td className="k">{k}</td>
+                <td>{a}</td>
+                <td>{b}</td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 function ClusterCard({ cluster }: { cluster: Cluster }) {
   const dup = cluster.size > 1
-  // Fields (rows) x members (columns), like the two-file pair view.
-  const keys = Array.from(
-    new Set(cluster.members.flatMap((m) => Object.keys(m.record))),
-  )
+  const keys = Array.from(new Set(cluster.members.flatMap((m) => Object.keys(m.record))))
   return (
     <div className={`pair-card ${dup ? 'review' : 'unique_a'}`}>
       <div className="pair-meta">

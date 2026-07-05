@@ -1,17 +1,23 @@
 """Single-file deduplication pipeline.
 
 Same cascade philosophy as the two-file linkage, but every stage compares rows of one
-file against each other, and instead of best-per-record pairs the output is a
-**clustering**: each row gets a `master_id`, and rows sharing a master_id are the same
-entity. This is what lets a user upload one messy list and get a cross-link back to a
-canonical id per duplicate group.
+file against each other, and the output is a **clustering**: each row gets a
+`master_id`, and rows sharing a master_id are the same entity.
+
+Like link mode, links are split by confidence:
+  - CONFIDENT links (score >= the Match threshold, default 0.90) auto-merge rows into
+    the base clusters.
+  - CANDIDATE links (Review band: review threshold <= score < Match threshold) are NOT
+    auto-merged. They're surfaced as "possible duplicates" for the user to confirm
+    (merge) or dismiss — mirroring the two-file review queue.
 
     raw
       -> normalize
-      -> deterministic within  (exact id / domain)
-      -> probabilistic within  (Splink dedupe_only)   [on rows not yet linked]
-      -> fuzzy within          (rapidfuzz)             [on rows not yet linked]
-      -> union all links -> connected components -> master_id per row
+      -> deterministic within  (exact id / domain)         [always confident]
+      -> probabilistic within  (Splink dedupe_only)
+      -> fuzzy within          (rapidfuzz)
+      -> split links by score  -> confident components = master_id per row
+                               -> review-band = possible-duplicate candidates
 """
 
 from __future__ import annotations
@@ -25,10 +31,13 @@ from .normalize import normalize_frame
 from .pipeline import MatchConfig, ProgressCb
 from .schema import CanonicalField
 
+_LINK_COLS = ["idx_a", "idx_b", "score", "stage", "rule"]
+
 
 @dataclass
 class DedupeResult:
-    clusters: pd.DataFrame   # row_idx, master_id, cluster_size
+    clusters: pd.DataFrame   # row_idx, master_id, cluster_size (from confident links)
+    candidates: pd.DataFrame  # review-band pairs between different clusters (idx_a<idx_b)
     norm: pd.DataFrame       # normalized frame (for optional display)
     counts: dict[str, int]
 
@@ -61,6 +70,8 @@ def run_dedupe(
 
     if config.use_probabilistic:
         progress("Probabilistic linkage (Splink)", 0.45)
+        # Only exclude rows CONFIDENTLY resolved deterministically; a row can still
+        # gain a review-band candidate link.
         sub = norm.loc[~norm.index.isin(resolved)]
         if len(sub) >= 2:
             prob = probabilistic.match_probabilistic_within(
@@ -81,11 +92,30 @@ def run_dedupe(
 
     progress("Clustering into master IDs", 0.9)
     all_links = (
-        pd.concat(links, ignore_index=True)
-        if links
-        else pd.DataFrame(columns=["idx_a", "idx_b", "score", "stage", "rule"])
+        pd.concat(links, ignore_index=True) if links else _empty_links()
     )
-    clusters = cluster.assign_master_ids(n, all_links)
+    all_links = _normalize_pairs(all_links)
+
+    # Split by confidence: confident links auto-cluster; review-band links become
+    # candidates the user must confirm before they merge.
+    confident = all_links[all_links["score"] >= config.thresholds.match]
+    candidate = all_links[
+        (all_links["score"] >= config.thresholds.review)
+        & (all_links["score"] < config.thresholds.match)
+    ]
+
+    clusters = cluster.assign_master_ids(n, confident)
+
+    # Keep only candidates that would actually merge two *different* base clusters
+    # (drop ones already connected confidently).
+    master = dict(zip(clusters["row_idx"], clusters["master_id"]))
+    if not candidate.empty:
+        keep = [
+            master.get(int(a)) != master.get(int(b))
+            for a, b in zip(candidate["idx_a"], candidate["idx_b"])
+        ]
+        candidate = candidate[keep]
+    candidates = candidate.reset_index(drop=True)
 
     num_clusters = int(clusters["master_id"].nunique()) if n else 0
     dup_rows = int((clusters["cluster_size"] > 1).sum())
@@ -100,6 +130,30 @@ def run_dedupe(
         "duplicate_rows": dup_rows,          # rows that share an id with another row
         "duplicate_clusters": dup_clusters,  # entities that have >1 row
         "unique_rows": num_clusters - dup_clusters,  # entities with exactly one row
+        "possible_duplicates": int(len(candidates)),  # review-band pairs awaiting a call
     }
     progress("Done", 1.0)
-    return DedupeResult(clusters=clusters, norm=norm, counts=counts)
+    return DedupeResult(
+        clusters=clusters, candidates=candidates, norm=norm, counts=counts
+    )
+
+
+def _empty_links() -> pd.DataFrame:
+    return pd.DataFrame(columns=_LINK_COLS)
+
+
+def _normalize_pairs(links: pd.DataFrame) -> pd.DataFrame:
+    """Order each pair as idx_a < idx_b and keep the single best-scoring copy."""
+    if links.empty:
+        return _empty_links()
+    a = links["idx_a"].astype(int)
+    b = links["idx_b"].astype(int)
+    out = links.copy()
+    out["idx_a"] = a.where(a < b, b)
+    out["idx_b"] = b.where(a < b, a)
+    out = out[out["idx_a"] != out["idx_b"]]
+    return (
+        out.sort_values("score", ascending=False)
+        .drop_duplicates(subset=["idx_a", "idx_b"], keep="first")
+        .reset_index(drop=True)
+    )

@@ -217,6 +217,44 @@ def test_dedupe_clusters_duplicates():
     assert c["duplicate_rows"] == 4
     assert c["duplicate_clusters"] == 2
     assert c["unique_rows"] == 1
+    assert c["possible_duplicates"] == 0  # all confident; nothing to review
+
+
+def test_dedupe_review_band_becomes_candidate(monkeypatch):
+    import app.storage as storage
+    from app import dedupe_review
+    from app.matching.dedupe import run_dedupe
+
+    mapping = {CanonicalField.NAME: "name"}
+    df = pd.DataFrame([
+        {"name": "Pinnacle Freight Services"},   # 0 \ borderline (~0.82) -> candidate
+        {"name": "Pinnacle Freight Systems"},    # 1 /  NOT auto-merged
+        {"name": "Globex Corporation"},          # 2   singleton
+    ])
+    res = run_dedupe(df, mapping, MatchConfig(use_probabilistic=False))
+    assert res.counts["clusters"] == 3            # borderline pair NOT auto-merged
+    assert res.counts["possible_duplicates"] == 1
+    assert len(res.candidates) == 1
+
+    store = {"s": res.clusters}
+    cands = {"s": res.candidates}
+    decs: dict = {}
+    monkeypatch.setattr(storage, "load_result", lambda sid: store[sid])
+    monkeypatch.setattr(storage, "load_candidates", lambda sid: cands[sid])
+    monkeypatch.setattr(storage, "load_decisions", lambda sid: decs.get(sid, {}))
+    monkeypatch.setattr(storage, "save_decisions", lambda sid, d: decs.__setitem__(sid, d))
+
+    # Confirming the candidate merges the two rows.
+    dedupe_review.set_candidate_decision("s", 0, 1, "confirmed")
+    assert dedupe_review.counts("s")["clusters"] == 2
+    eff = dedupe_review.effective_clusters("s")
+    m = dict(zip(eff["row_idx"], eff["master_id"]))
+    assert m[0] == m[1] and m[0] != m[2]
+
+    # Dismissing keeps them apart.
+    dedupe_review.set_candidate_decision("s", 0, 1, "dismissed")
+    assert dedupe_review.counts("s")["clusters"] == 3
+    assert dedupe_review.counts("s")["dismissed"] == 1
 
 
 # ---- review decisions (confirm / dismiss) ----------------------------------

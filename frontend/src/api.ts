@@ -83,6 +83,25 @@ export interface ClustersResponse {
   clusters: Cluster[]
 }
 
+export interface DedupeCandidate {
+  idx_a: number
+  idx_b: number
+  score: number
+  stage: string
+  decision: string | null
+  record_a: Record<string, string>
+  record_b: Record<string, string>
+}
+
+export interface CandidatesResponse {
+  session_id: string
+  total: number
+  page: number
+  page_size: number
+  counts: Record<string, number>
+  candidates: DedupeCandidate[]
+}
+
 async function jsonOrThrow<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let detail = res.statusText
@@ -184,6 +203,17 @@ export async function postDecision(
       body: JSON.stringify({ idx_a: idxA, idx_b: idxB, decision }),
     }),
   )
+}
+
+export async function getCandidates(
+  sessionId: string,
+  opts: { filter?: string; page?: number; pageSize?: number } = {},
+): Promise<CandidatesResponse> {
+  const p = new URLSearchParams()
+  if (opts.filter) p.set('filter', opts.filter)
+  p.set('page', String(opts.page ?? 0))
+  p.set('page_size', String(opts.pageSize ?? 25))
+  return jsonOrThrow(await fetch(`/api/session/${sessionId}/candidates?${p}`))
 }
 
 export function downloadUrl(sessionId: string): string {

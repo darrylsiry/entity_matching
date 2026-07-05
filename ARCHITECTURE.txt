@@ -91,6 +91,11 @@ Top-level modules (backend/app/):
                  the "effective" result frame — so results, counts, and the CSV always
                  reflect the user's choices without rewriting the big results file.
 
+  dedupe_review.py  The equivalent for dedupe mode: base clusters are built from
+                 confident links only; review-band "possible duplicate" candidates are
+                 stored separately, and confirming one re-runs the clustering with the
+                 extra link (so the two rows merge into one master ID).
+
   evaluation.py  Developer-only accuracy check. If a ground_truth_matches.csv is present
                  and the uploaded data corresponds to it, reports precision/recall/F1 of
                  the matches. Harmless/absent otherwise.
@@ -206,8 +211,10 @@ Because the frontend uses relative URLs, the SAME built code runs in both enviro
   POST /api/session/{id}/run            start the background matching job
   GET  /api/session/{id}/status         poll {state, stage, progress, counts}
   GET  /api/session/{id}/results        (link) paginated pairs, filterable by class
-  POST /api/session/{id}/decision       (link) confirm / dismiss / undo a review pair
-  GET  /api/session/{id}/clusters       (dedupe) master-ID clusters, paginated
+  POST /api/session/{id}/decision       confirm/dismiss/undo — a review pair (link) or
+                                        a possible-duplicate candidate (dedupe)
+  GET  /api/session/{id}/clusters       (dedupe) master-ID clusters (reflects merges)
+  GET  /api/session/{id}/candidates     (dedupe) possible-duplicate pairs to review
   GET  /api/session/{id}/evaluation     (debug) precision/recall vs ground truth, if present
   GET  /api/session/{id}/download       final results as CSV (reflects review decisions)
 
@@ -221,7 +228,8 @@ backend/data/, set to /data in the container):
   uploads/<file_id>.parquet     the uploaded table (all columns as strings)
   uploads/<file_id>.json        {filename, columns, rows}
   sessions/<session_id>.json    the run request (mode, file ids, mappings, config)
-  sessions/<session_id>_results.parquet   the match pairs (+ unique rows) or dedupe clusters
+  sessions/<session_id>_results.parquet   the match pairs (+ unique rows) or base dedupe clusters
+  sessions/<session_id>_candidates.parquet (dedupe) review-band "possible duplicate" pairs
   sessions/<session_id>_decisions.json    review overlay: {"idxA:idxB": "confirmed"|"dismissed"}
 
 Job progress/counts live in memory (jobs.py). After a restart the in-memory job is gone,

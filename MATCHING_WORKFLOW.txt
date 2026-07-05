@@ -185,22 +185,33 @@ LINK MODE — classify each pair by its score into bands:
       per file:  matched + review + unique  =  total rows.
     Parameters:  match threshold = 0.90,  review threshold = 0.75
 
-DEDUPE MODE — cluster instead of classify:
-  All links from Stages 1–3 are pooled and connected-components are computed with a
-  union-find (disjoint-set) algorithm. Each connected group becomes one entity and
-  gets a master ID (numbered by smallest row index, so IDs are stable). Rows with no
-  links are singletons (their own master ID).
+DEDUPE MODE — cluster instead of classify (same confidence split as link mode):
+  Links from Stages 1–3 are split by score:
+    • CONFIDENT links (score >= 0.90) are pooled and connected-components are computed
+      with a union-find (disjoint-set) algorithm. Each group becomes one entity with a
+      master ID (numbered by smallest row index, so IDs are stable). Unlinked rows are
+      singletons.
+    • REVIEW-band links (0.75 <= score < 0.90) that would join two *different* clusters
+      are NOT merged automatically. They become "possible duplicates" — surfaced for the
+      user to confirm (which merges the two rows' clusters) or dismiss (keeps them
+      apart). See the review workflow below.
 
 
 --------------------------------------------------------------------------------
-HUMAN REVIEW WORKFLOW (link mode only)
+HUMAN REVIEW WORKFLOW
 --------------------------------------------------------------------------------
-File: review.py. For every pair classified as REVIEW the user can:
+LINK MODE (review.py). For every pair classified as REVIEW the user can:
   • Confirm  -> it becomes a MATCH in the final dataset (and CSV export).
   • Dismiss  -> it is not a match; the two records revert to "unique".
   • Undo     -> clears a prior decision.
-Decisions are stored as a small overlay and applied when results/counts/CSV are read,
-so the exported dataset always reflects the user's choices.
+
+DEDUPE MODE (dedupe_review.py). For every "possible duplicate" candidate the user can:
+  • Confirm  -> the two rows merge into the same master ID (clusters recomputed).
+  • Dismiss  -> the rows stay in separate clusters.
+  • Undo     -> clears a prior decision.
+
+In both modes decisions are stored as a small overlay and applied when results/counts/
+CSV are read, so the exported dataset always reflects the user's choices.
 
 
 --------------------------------------------------------------------------------

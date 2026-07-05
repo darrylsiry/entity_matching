@@ -98,10 +98,10 @@ DEDUPE_ROWS = [
          address="500 Blvd", city="Austin", postcode="73301", country="USA"),
     dict(name="Globex Corp", website="www.globex.com", ein="",
          address="500 Boulevard", city="Austin", postcode="73301", country="US"),
-    dict(name="Initech LLC", website="", ein="",
+    dict(name="Initech Systems LLC", website="", ein="",
          address="200 Tech Way", city="Boston", postcode="02110", country="USA"),
-    dict(name="Initech Technologies", website="", ein="",
-         address="200 Technology Way", city="Boston", postcode="02110", country="US"),
+    dict(name="Initech Systems", website="", ein="",
+         address="200 Tech Way", city="Boston", postcode="02110", country="US"),
     dict(name="Umbrella Health Group", website="", ein="",
          address="9 Raccoon Rd", city="Raccoon City", postcode="44101", country="USA"),
     dict(name="Umbrela Health Group", website="", ein="",
@@ -112,6 +112,12 @@ DEDUPE_ROWS = [
          address="18144 El Camino", city="Sunnyvale", postcode="94086", country="USA"),
     dict(name="Stark Industries", website="", ein="",
          address="10 Ave", city="New York", postcode="10001", country="USA"),
+    # Borderline pair (similar name only, different city) -> a "possible duplicate"
+    # candidate the user confirms or dismisses rather than an automatic merge.
+    dict(name="Pinnacle Freight Services", website="", ein="",
+         address="", city="Denver", postcode="", country="USA"),
+    dict(name="Pinnacle Freight Systems", website="", ein="",
+         address="", city="Kansas City", postcode="", country="US"),
 ]
 
 
@@ -124,8 +130,9 @@ def main() -> None:
     expected = sum(1 for _, b in COMPANIES if b is not None)
     print(f"Wrote file_a.csv ({len(a_rows)} rows), file_b.csv ({len(b_rows)} rows)")
     print(f"Expected two-file pairs: {expected} (7 confident matches + 2 for review)")
-    print(f"Wrote file_dedupe.csv ({len(DEDUPE_ROWS)} rows) — expect 7 entities "
-          f"(Acme×3, Globex×2, Initech×2, Umbrella×2, + 3 singletons)")
+    print(f"Wrote file_dedupe.csv ({len(DEDUPE_ROWS)} rows) — 4 confident duplicate "
+          f"groups (Acme×3, Globex×2, Initech×2, Umbrella×2) + 1 possible-duplicate "
+          f"pair (Pinnacle Freight) to review")
 
 
 if __name__ == "__main__":

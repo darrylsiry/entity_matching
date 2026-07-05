@@ -88,6 +88,19 @@ def result_exists(session_id: str) -> bool:
     return (SESSION_DIR / f"{session_id}_results.parquet").exists()
 
 
+# ---- dedupe "possible duplicate" candidates (review-band within-file pairs) ---
+
+def save_candidates(session_id: str, candidates: pd.DataFrame) -> None:
+    candidates.to_parquet(SESSION_DIR / f"{session_id}_candidates.parquet", index=False)
+
+
+def load_candidates(session_id: str) -> pd.DataFrame:
+    path = SESSION_DIR / f"{session_id}_candidates.parquet"
+    if not path.exists():
+        return pd.DataFrame(columns=["idx_a", "idx_b", "score", "stage", "rule"])
+    return pd.read_parquet(path)
+
+
 # ---- review decisions (small overlay, kept out of the big result parquet) ---
 
 def load_decisions(session_id: str) -> dict:

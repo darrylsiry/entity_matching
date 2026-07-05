@@ -136,3 +136,22 @@ class ClustersResponse(BaseModel):
     page_size: int
     counts: dict
     clusters: list[ClusterOut]
+
+
+class DedupeCandidate(BaseModel):
+    idx_a: int
+    idx_b: int
+    score: float
+    stage: str
+    decision: str | None = None   # None = pending; "confirmed" merges; "dismissed" keeps apart
+    record_a: dict
+    record_b: dict
+
+
+class CandidatesResponse(BaseModel):
+    session_id: str
+    total: int
+    page: int
+    page_size: int
+    counts: dict
+    candidates: list[DedupeCandidate]

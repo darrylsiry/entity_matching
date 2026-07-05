@@ -498,6 +498,16 @@ select {
   display: flex;
   gap: 6px;
   margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.filter-tabs.sub {
+  margin-top: -6px;
+  margin-bottom: 16px;
+  padding-left: 4px;
+}
+.filter-tabs.sub .tab {
+  font-size: 12px;
+  padding: 4px 10px;
 }
 .tab {
   font: inherit;

@@ -49,6 +49,7 @@ def run_match_job(session_id: str) -> None:
         if req.mode == "dedupe":
             result = run_dedupe(raw_a, mapping_a, config, progress)
             storage.save_result(session_id, result.clusters)
+            storage.save_candidates(session_id, result.candidates)
             counts = result.counts
         else:
             raw_b = storage.load_upload(req.file_id_b)
@@ -136,4 +137,27 @@ def dedupe_download_frame(session_id: str, cluster_rows: pd.DataFrame) -> pd.Dat
     out = raw.copy()
     out.insert(0, "master_id", ann["master_id"].reindex(range(len(raw))).values)
     out.insert(1, "cluster_size", ann["cluster_size"].reindex(range(len(raw))).values)
+    return out
+
+
+def enrich_candidates(session_id: str, cand_rows: pd.DataFrame) -> list[dict]:
+    """Attach the two rows' records to each possible-duplicate candidate pair."""
+    raw = load_dedupe_source(session_id)
+    out: list[dict] = []
+    for _, r in cand_rows.iterrows():
+        ia, ib = int(r["idx_a"]), int(r["idx_b"])
+        decision = r["decision"] if "decision" in cand_rows.columns else None
+        if decision is not None and pd.isna(decision):
+            decision = None
+        out.append(
+            {
+                "idx_a": ia,
+                "idx_b": ib,
+                "score": float(r["score"]),
+                "stage": r["stage"],
+                "decision": decision,
+                "record_a": _record(raw, ia),
+                "record_b": _record(raw, ib),
+            }
+        )
     return out

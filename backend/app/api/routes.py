@@ -8,11 +8,12 @@ import pandas as pd
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 
-from .. import evaluation, review, service, storage
+from .. import dedupe_review, evaluation, review, service, storage
 from ..jobs import JobState, registry
 from ..matching.schema import FIELD_SPECS
 from ..matching.scoring import MATCH, REVIEW
 from ..models import (
+    CandidatesResponse,
     ClusterOut,
     ClustersResponse,
     ColumnInfo,
@@ -20,6 +21,7 @@ from ..models import (
     CreateSessionResponse,
     DecisionRequest,
     DecisionResponse,
+    DedupeCandidate,
     EvaluationResponse,
     FieldSpecOut,
     MatchPair,
@@ -179,16 +181,25 @@ def get_results(
 
 @router.post("/session/{session_id}/decision", response_model=DecisionResponse)
 def decide(session_id: str, req: DecisionRequest) -> DecisionResponse:
-    """Confirm, dismiss, or clear a decision on a review pair."""
+    """Confirm / dismiss / clear a decision.
+
+    Link mode: on a review pair (accept or reject the A<->B match).
+    Dedupe mode: on a possible-duplicate candidate (merge the rows, or keep them apart).
+    """
     try:
-        review.set_decision(session_id, req.idx_a, req.idx_b, req.decision)
+        if _session_mode(session_id) == "dedupe":
+            dedupe_review.set_candidate_decision(
+                session_id, req.idx_a, req.idx_b, req.decision
+            )
+            counts = dedupe_review.counts(session_id)
+        else:
+            review.set_decision(session_id, req.idx_a, req.idx_b, req.decision)
+            counts = review.effective_counts(session_id)
     except FileNotFoundError as exc:
         raise HTTPException(404, "no results yet") from exc
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
-    return DecisionResponse(
-        session_id=session_id, counts=review.effective_counts(session_id)
-    )
+    return DecisionResponse(session_id=session_id, counts=counts)
 
 
 @router.get("/session/{session_id}/evaluation", response_model=EvaluationResponse)
@@ -216,14 +227,13 @@ def get_clusters(
     page: int = Query(0, ge=0),
     page_size: int = Query(25, ge=1, le=200),
 ) -> ClustersResponse:
-    """Dedupe results: rows grouped into master-ID clusters."""
-    try:
-        rows = storage.load_result(session_id)
-    except FileNotFoundError as exc:
-        raise HTTPException(404, "no results yet") from exc
-    if "master_id" not in rows.columns:
+    """Dedupe results: rows grouped into master-ID clusters (reflects confirmed merges)."""
+    if not storage.result_exists(session_id):
+        raise HTTPException(404, "no results yet")
+    if _session_mode(session_id) != "dedupe":
         raise HTTPException(400, "this session is not a dedupe session")
 
+    rows = dedupe_review.effective_clusters(session_id)
     if filter == "duplicates":
         rows = rows[rows["cluster_size"] > 1]
     elif filter == "unique":
@@ -246,24 +256,40 @@ def get_clusters(
     clusters = service.build_clusters(session_id, page_rows)
     return ClustersResponse(
         session_id=session_id, total=total, page=page, page_size=page_size,
-        counts=_dedupe_counts(storage.load_result(session_id)),
+        counts=dedupe_review.counts(session_id),
         clusters=[ClusterOut(**c) for c in clusters],
     )
 
 
-def _dedupe_counts(rows: pd.DataFrame) -> dict:
-    if rows.empty:
-        return {"records": 0, "clusters": 0, "duplicate_rows": 0,
-                "duplicate_clusters": 0, "unique_rows": 0}
-    n_clusters = int(rows["master_id"].nunique())
-    dup_clusters = int(rows.loc[rows["cluster_size"] > 1, "master_id"].nunique())
-    return {
-        "records": int(len(rows)),
-        "clusters": n_clusters,
-        "duplicate_rows": int((rows["cluster_size"] > 1).sum()),
-        "duplicate_clusters": dup_clusters,
-        "unique_rows": n_clusters - dup_clusters,
-    }
+@router.get("/session/{session_id}/candidates", response_model=CandidatesResponse)
+def get_candidates(
+    session_id: str,
+    filter: str = Query("pending", description="pending|confirmed|dismissed|all"),
+    page: int = Query(0, ge=0),
+    page_size: int = Query(25, ge=1, le=200),
+) -> CandidatesResponse:
+    """Dedupe "possible duplicates": review-band pairs to confirm (merge) or dismiss."""
+    if not storage.result_exists(session_id):
+        raise HTTPException(404, "no results yet")
+    if _session_mode(session_id) != "dedupe":
+        raise HTTPException(400, "this session is not a dedupe session")
+
+    view = dedupe_review.candidate_view(session_id)
+    if not view.empty:
+        if filter == "pending":
+            view = view[view["decision"].isna()]
+        elif filter in ("confirmed", "dismissed"):
+            view = view[view["decision"] == filter]
+        view = view.sort_values("score", ascending=False)
+
+    total = int(len(view))
+    page_rows = view.iloc[page * page_size : page * page_size + page_size]
+    enriched = service.enrich_candidates(session_id, page_rows)
+    return CandidatesResponse(
+        session_id=session_id, total=total, page=page, page_size=page_size,
+        counts=dedupe_review.counts(session_id),
+        candidates=[DedupeCandidate(**c) for c in enriched],
+    )
 
 
 @router.get("/session/{session_id}/download")
@@ -272,7 +298,10 @@ def download(session_id: str) -> StreamingResponse:
         raise HTTPException(404, "no results yet")
 
     if _session_mode(session_id) == "dedupe":
-        out = service.dedupe_download_frame(session_id, storage.load_result(session_id))
+        # Effective clusters -> confirmed possible-duplicates are merged in the export.
+        out = service.dedupe_download_frame(
+            session_id, dedupe_review.effective_clusters(session_id)
+        )
         filename = f"deduplicated_{session_id}.csv"
     else:
         # Effective frame -> confirmed reviews export as matches, dismissed as unique.
