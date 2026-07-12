@@ -4,6 +4,11 @@ import type { FieldSpec, UploadResponse } from './api'
 
 export type Mapping = Record<string, string>
 
+// ════════════════════════════════════════════════════════════════════════
+// SECTION: Header-name hints — per canonical field, the substrings we look
+// for in a column header (exact match tried first, then substring).
+// ════════════════════════════════════════════════════════════════════════
+
 const HINTS: Record<string, string[]> = {
   name: ['name', 'company', 'organisation', 'organization', 'legal', 'entity'],
   registration_id: ['ein', 'duns', 'vat', 'reg', 'registration', 'tax', 'number', 'id'],
