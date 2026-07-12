@@ -1,3 +1,7 @@
+// Wizard step 3 (link mode only) — map each file's columns onto the canonical
+// fields. Mappings are auto-guessed from the headers on first render; a
+// registration-ID *type* can be declared per file so cross-type numeric
+// collisions (DUNS vs EIN) never join.
 import { useEffect } from 'react'
 import type { FieldSpec, RegistrationIdType, UploadResponse } from '../api'
 import { autoMap, type Mapping } from '../mapping'
@@ -18,6 +22,11 @@ interface Props {
   onBack: () => void
   onNext: () => void
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// SECTION: Registration-ID type select — shown only when a reg-id column is
+// mapped; the choice is sent with the session (backend guard, spec 1.7).
+// ════════════════════════════════════════════════════════════════════════
 
 const ID_TYPES: { value: RegistrationIdType; label: string }[] = [
   { value: 'unknown', label: 'Unknown / mixed' },
@@ -49,6 +58,12 @@ function IdTypeSelect({
     </div>
   )
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// SECTION: Step component — two FieldMapper tables (one per file), auto-fill
+// on mount, a warning when declared id types differ, and a "name is required"
+// gate on the Next button.
+// ════════════════════════════════════════════════════════════════════════
 
 export function ColumnMapStep(props: Props) {
   const { fields, uploadA, uploadB, mappingA, mappingB, setMappingA, setMappingB } = props

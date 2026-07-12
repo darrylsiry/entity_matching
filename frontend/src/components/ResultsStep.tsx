@@ -1,3 +1,7 @@
+// Results screen (link mode) — the review workbench. Shows reconciliation bars,
+// filter tabs, and pair cards with full provenance; supports single/bulk
+// confirm-dismiss, keyboard review (↑↓/jk + y/n/u), instant threshold
+// re-classification, ground-truth evaluation, and CSV export.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   downloadUrl,
@@ -27,6 +31,12 @@ const FILTERS = [
   { key: 'unique_a', label: 'Unique in A', count: 'unique_a' },
   { key: 'unique_b', label: 'Unique in B', count: 'unique_b' },
 ]
+
+// ════════════════════════════════════════════════════════════════════════
+// SECTION: Main screen — loads the current filter's page of pairs (plus the
+// evaluation panel), applies decisions, walks all pages for bulk actions,
+// and wires the keyboard shortcuts.
+// ════════════════════════════════════════════════════════════════════════
 
 export function ResultsStep({ sessionId, onReset }: Props) {
   const [data, setData] = useState<ResultsResponse | null>(null)
@@ -299,7 +309,11 @@ export function ResultsStep({ sessionId, onReset }: Props) {
   )
 }
 
-// Adjust thresholds and re-classify stored scores without re-running the pipeline.
+// ════════════════════════════════════════════════════════════════════════
+// SECTION: Threshold panel — sliders + "Apply & re-classify", which re-bands
+// the stored scores on the server without re-running the matching pipeline.
+// ════════════════════════════════════════════════════════════════════════
+
 function ThresholdPanel({
   sessionId,
   onApplied,
@@ -377,6 +391,11 @@ function ThresholdPanel({
   )
 }
 
+// ════════════════════════════════════════════════════════════════════════
+// SECTION: Ground-truth upload — a labeled sample (file_a_name,file_b_name)
+// the session is scored against; refreshes the evaluation panel on success.
+// ════════════════════════════════════════════════════════════════════════
+
 function GroundTruthUpload({
   sessionId,
   onUploaded,
@@ -414,6 +433,12 @@ function GroundTruthUpload({
     </label>
   )
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// SECTION: Pair card — one A↔B pair: class badge, match reason + adjustment
+// chips (the provenance), confirm/dismiss/undo buttons, and a side-by-side
+// field table with differing values highlighted.
+// ════════════════════════════════════════════════════════════════════════
 
 function PairCard({
   pair,
@@ -510,6 +535,12 @@ function PairCard({
     </div>
   )
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// SECTION: Provenance display constants + matchReason()
+// Human-readable badge labels, chip labels/tooltips for each corroboration
+// signal, and the per-rule explanation of WHY the cascade linked a pair.
+// ════════════════════════════════════════════════════════════════════════
 
 const LABEL: Record<string, string> = {
   match: 'match',
@@ -608,6 +639,11 @@ function matchReason(pair: MatchPair): { icon: string; label: string; detail: st
 }
 
 // Accuracy panel comparing the match set to ground truth (uploaded or repo file).
+// ════════════════════════════════════════════════════════════════════════
+// SECTION: Evaluation box — P/R/F1 vs ground truth, plus an "apply suggested
+// threshold" button when the swept best-F1 point beats the current setting.
+// ════════════════════════════════════════════════════════════════════════
+
 function EvalBox({ e, onApplySuggestion }: { e: Evaluation; onApplySuggestion?: () => void }) {
   if (!e.applicable) {
     return (
@@ -650,6 +686,11 @@ function EvalBox({ e, onApplySuggestion }: { e: Evaluation; onApplySuggestion?: 
     </div>
   )
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// SECTION: Reconciliation bars — per-file stacked bar proving the categories
+// add up: matched + review + unique == total rows.
+// ════════════════════════════════════════════════════════════════════════
 
 interface Segment {
   label: string

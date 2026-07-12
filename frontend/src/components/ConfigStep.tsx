@@ -1,3 +1,6 @@
+// Wizard "Configure" step — toggle the cascade stages, set the Match/Review
+// thresholds, tune advanced options, and (dedupe mode) confirm the auto-
+// detected field mapping. All choices land in the shared SessionConfig.
 import { useState } from 'react'
 import type { FieldSpec, Mode, SessionConfig, UploadResponse } from '../api'
 import type { Mapping } from '../mapping'
@@ -16,6 +19,10 @@ interface Props {
   setMapping?: (m: Mapping) => void
 }
 
+// ════════════════════════════════════════════════════════════════════════
+// SECTION: Stage toggles — the three cascade stages the user can turn on/off
+// ════════════════════════════════════════════════════════════════════════
+
 const STAGES = [
   {
     key: 'use_deterministic' as const,
@@ -33,6 +40,12 @@ const STAGES = [
     desc: 'rapidfuzz name similarity for anything the earlier stages missed.',
   },
 ]
+
+// ════════════════════════════════════════════════════════════════════════
+// SECTION: Step component — stage checkboxes, threshold sliders, the advanced
+// panel, and (dedupe) the detected-fields panel; gates Next on "at least one
+// stage enabled" and (dedupe) "name field detected".
+// ════════════════════════════════════════════════════════════════════════
 
 export function ConfigStep({
   mode,
@@ -142,6 +155,12 @@ export function ConfigStep({
   )
 }
 
+// ════════════════════════════════════════════════════════════════════════
+// SECTION: Advanced matching options — collapsible panel for the Phase-1
+// feature flags (phone matching, phonetic blocking, rare-name weighting,
+// domain/phone corroboration guard). All default ON.
+// ════════════════════════════════════════════════════════════════════════
+
 const ADVANCED_TOGGLES: {
   key:
     'use_phone' | 'use_phonetic_blocking' | 'splink_tf_adjustments' | 'deterministic_corroboration'
@@ -213,6 +232,11 @@ function AdvancedPanel({
     </div>
   )
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// SECTION: Detected fields (dedupe only) — one-line summary of the auto-
+// guessed column mapping with an expandable editor to correct any guess.
+// ════════════════════════════════════════════════════════════════════════
 
 function DetectedFields({
   fields,
