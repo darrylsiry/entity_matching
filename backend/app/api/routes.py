@@ -13,6 +13,7 @@ from ..jobs import JobState, registry
 from ..matching.schema import FIELD_SPECS
 from ..matching.scoring import MATCH, REVIEW
 from ..models import (
+    BulkDecisionRequest,
     CandidatesResponse,
     ClusterOut,
     ClustersResponse,
@@ -25,6 +26,8 @@ from ..models import (
     EvaluationResponse,
     FieldSpecOut,
     MatchPair,
+    ReclassifyRequest,
+    ReclassifyResponse,
     ResultsResponse,
     StatusResponse,
     UploadResponse,
@@ -33,6 +36,8 @@ from ..models import (
 router = APIRouter(prefix="/api")
 
 _SAMPLE_ROWS = 5
+MAX_UPLOAD_BYTES = 100 * 1024 * 1024   # 100 MB
+MAX_UPLOAD_ROWS = 500_000
 
 
 @router.get("/fields", response_model=list[FieldSpecOut])
@@ -62,12 +67,18 @@ async def upload(file: UploadFile = File(...)) -> UploadResponse:
     raw = await file.read()
     if not raw:
         raise HTTPException(400, "empty file")
+    if len(raw) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            413, f"file too large (max {MAX_UPLOAD_BYTES // (1024 * 1024)} MB)"
+        )
     try:
         df = _read_table(raw, file.filename or "upload.csv")
     except Exception as exc:
         raise HTTPException(400, f"could not parse file: {exc}") from exc
     if df.empty or len(df.columns) == 0:
         raise HTTPException(400, "file has no columns/rows")
+    if len(df) > MAX_UPLOAD_ROWS:
+        raise HTTPException(413, f"too many rows (max {MAX_UPLOAD_ROWS:,})")
 
     file_id, columns = storage.save_upload(df, file.filename or "upload.csv")
 
@@ -202,6 +213,82 @@ def decide(session_id: str, req: DecisionRequest) -> DecisionResponse:
     return DecisionResponse(session_id=session_id, counts=counts)
 
 
+@router.post("/session/{session_id}/decisions/bulk", response_model=DecisionResponse)
+def decide_bulk(session_id: str, req: BulkDecisionRequest) -> DecisionResponse:
+    """Apply one decision to many pairs (bulk review). Unknown pairs are skipped."""
+    is_dedupe = _session_mode(session_id) == "dedupe"
+    applied = 0
+    try:
+        for d in req.pairs:
+            try:
+                if is_dedupe:
+                    dedupe_review.set_candidate_decision(
+                        session_id, d.idx_a, d.idx_b, d.decision
+                    )
+                else:
+                    review.set_decision(session_id, d.idx_a, d.idx_b, d.decision)
+                applied += 1
+            except KeyError:
+                continue  # pair no longer in a decidable state — skip, don't abort
+        counts = (
+            dedupe_review.counts(session_id)
+            if is_dedupe
+            else review.effective_counts(session_id)
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "no results yet") from exc
+    counts["bulk_applied"] = applied
+    return DecisionResponse(session_id=session_id, counts=counts)
+
+
+@router.post("/session/{session_id}/reclassify", response_model=ReclassifyResponse)
+def reclassify(session_id: str, req: ReclassifyRequest) -> ReclassifyResponse:
+    """Change thresholds and re-run classification on stored scores (no re-matching)."""
+    if req.review > req.match:
+        raise HTTPException(400, "review threshold must be <= match threshold")
+    try:
+        summary = service.reclassify(session_id, req.match, req.review)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "no stored pair pool for this session") from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return ReclassifyResponse(
+        session_id=session_id,
+        match=summary["match"],
+        review=summary["review"],
+        min_stored_score=summary["min_stored_score"],
+        counts=review.effective_counts(session_id),
+    )
+
+
+@router.post("/session/{session_id}/ground_truth", response_model=EvaluationResponse)
+async def upload_ground_truth(
+    session_id: str, file: UploadFile = File(...)
+) -> EvaluationResponse:
+    """Upload a labeled sample of true matches to score this session against.
+
+    Expected columns: `file_a_name`, `file_b_name` (extra columns are ignored). A CSV
+    with exactly two columns is accepted with the columns taken in order.
+    """
+    raw = await file.read()
+    if not raw or len(raw) > MAX_UPLOAD_BYTES:
+        raise HTTPException(400, "empty or oversized file")
+    try:
+        gt = _read_table(raw, file.filename or "ground_truth.csv")
+    except Exception as exc:
+        raise HTTPException(400, f"could not parse file: {exc}") from exc
+
+    if not {"file_a_name", "file_b_name"}.issubset(gt.columns):
+        if len(gt.columns) == 2:  # two unnamed/other columns: take them in order
+            gt.columns = ["file_a_name", "file_b_name"]
+        else:
+            raise HTTPException(
+                400, "expected columns file_a_name,file_b_name (or exactly 2 columns)"
+            )
+    storage.save_ground_truth(session_id, gt[["file_a_name", "file_b_name"]])
+    return EvaluationResponse(**evaluation.evaluate(session_id))
+
+
 @router.get("/session/{session_id}/evaluation", response_model=EvaluationResponse)
 def get_evaluation(session_id: str) -> EvaluationResponse:
     """Debug: score the session's matches against the repo's ground-truth file."""
@@ -310,6 +397,7 @@ def download(session_id: str) -> StreamingResponse:
             row = {
                 "score": p["score"], "match_class": p["match_class"],
                 "decision": p["decision"] or "", "stage": p["stage"], "rule": p["rule"],
+                "adjustments": p["adjustments"],
             }
             row.update({f"a_{k}": v for k, v in p["record_a"].items()})
             row.update({f"b_{k}": v for k, v in p["record_b"].items()})
@@ -318,10 +406,28 @@ def download(session_id: str) -> StreamingResponse:
         filename = f"matches_{session_id}.csv"
 
     buf = io.StringIO()
-    out.to_csv(buf, index=False)
+    _csv_sanitize(out).to_csv(buf, index=False)
     buf.seek(0)
     return StreamingResponse(
         iter([buf.getvalue()]),
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
+
+
+def _csv_sanitize(df: pd.DataFrame) -> pd.DataFrame:
+    """Neutralize spreadsheet formula injection in exported CSVs.
+
+    A cell like `=cmd|...` or `+HYPERLINK(...)` executes when the CSV is opened in
+    Excel/Sheets. Prefix string cells starting with = + - @ with a single quote,
+    which spreadsheet apps treat as "display as text".
+    """
+    out = df.copy()
+    for col in out.columns:
+        if out[col].dtype == object:
+            out[col] = out[col].map(
+                lambda v: f"'{v}"
+                if isinstance(v, str) and v[:1] in ("=", "+", "-", "@")
+                else v
+            )
+    return out

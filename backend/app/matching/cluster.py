@@ -49,7 +49,7 @@ def assign_master_ids(n_rows: int, links: pd.DataFrame) -> pd.DataFrame:
     """
     uf = _UnionFind(n_rows)
     if links is not None and not links.empty:
-        for a, b in zip(links["idx_a"].astype(int), links["idx_b"].astype(int)):
+        for a, b in zip(links["idx_a"].astype(int), links["idx_b"].astype(int), strict=False):
             if 0 <= a < n_rows and 0 <= b < n_rows:
                 uf.union(a, b)
 

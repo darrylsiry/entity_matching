@@ -35,7 +35,15 @@ const STAGES = [
 ]
 
 export function ConfigStep({
-  mode, config, setConfig, onBack, onNext, fields, upload, mapping, setMapping,
+  mode,
+  config,
+  setConfig,
+  onBack,
+  onNext,
+  fields,
+  upload,
+  mapping,
+  setMapping,
 }: Props) {
   const [showFields, setShowFields] = useState(false)
 
@@ -56,8 +64,8 @@ export function ConfigStep({
     <div>
       <h2>Configure matching</h2>
       <p className="muted">
-        Records flow through these stages in series; each stage only sees what earlier
-        ones didn&apos;t confidently resolve.
+        Records flow through these stages in series; each stage only sees what earlier ones
+        didn&apos;t confidently resolve.
       </p>
 
       {canEditFields && (
@@ -108,16 +116,18 @@ export function ConfigStep({
           />
         </div>
         <p className="muted small">
-          Pairs scoring at or above <em>Match</em> are auto-accepted; between{' '}
-          <em>Review</em> and <em>Match</em> are flagged for a human; below are dropped.
+          Pairs scoring at or above <em>Match</em> are auto-accepted; between <em>Review</em> and{' '}
+          <em>Match</em> are flagged for a human; below are dropped.
         </p>
       </div>
+
+      <AdvancedPanel config={config} setConfig={setConfig} />
 
       {!anyStage && <div className="error">Enable at least one stage.</div>}
       {!nameOk && (
         <div className="error">
-          Company name isn&apos;t detected — open “Detected fields” above and pick the
-          name column to continue.
+          Company name isn&apos;t detected — open “Detected fields” above and pick the name column
+          to continue.
         </div>
       )}
       <div className="actions">
@@ -132,8 +142,85 @@ export function ConfigStep({
   )
 }
 
+const ADVANCED_TOGGLES: {
+  key:
+    'use_phone' | 'use_phonetic_blocking' | 'splink_tf_adjustments' | 'deterministic_corroboration'
+  title: string
+  desc: string
+}[] = [
+  {
+    key: 'use_phone',
+    title: 'Match on phone numbers',
+    desc: 'Exact-match normalized phone numbers as a strong identifier (needs a mapped phone column).',
+  },
+  {
+    key: 'use_phonetic_blocking',
+    title: 'Phonetic blocking',
+    desc: 'Also compare names that sound alike (Metaphone), catching typos in the first letters.',
+  },
+  {
+    key: 'splink_tf_adjustments',
+    title: 'Rare-name weighting',
+    desc: 'Agreement on a rare name/city counts for more than agreement on a common one.',
+  },
+  {
+    key: 'deterministic_corroboration',
+    title: 'Guard shared domains/phones',
+    desc: 'A shared website or phone with totally different names goes to review instead of auto-matching.',
+  },
+]
+
+function AdvancedPanel({
+  config,
+  setConfig,
+}: {
+  config: SessionConfig
+  setConfig: (c: SessionConfig) => void
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="detected advanced">
+      <div className="detected-head">
+        <div>
+          <strong>Advanced matching options</strong>{' '}
+          <span className="muted small">
+            {ADVANCED_TOGGLES.filter((t) => config[t.key]).length}/{ADVANCED_TOGGLES.length} enabled
+          </span>
+        </div>
+        <button className="btn btn-ghost btn-sm" onClick={() => setOpen((v) => !v)}>
+          {open ? 'Done' : 'Adjust'}
+        </button>
+      </div>
+      {open && (
+        <div className="detected-body">
+          <div className="stage-list">
+            {ADVANCED_TOGGLES.map((t) => (
+              <label key={t.key} className={`stage ${config[t.key] ? 'on' : ''}`}>
+                <input
+                  type="checkbox"
+                  checked={config[t.key]}
+                  onChange={() => setConfig({ ...config, [t.key]: !config[t.key] })}
+                />
+                <div>
+                  <div className="stage-title">{t.title}</div>
+                  <div className="muted">{t.desc}</div>
+                </div>
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function DetectedFields({
-  fields, upload, mapping, setMapping, open, onToggle,
+  fields,
+  upload,
+  mapping,
+  setMapping,
+  open,
+  onToggle,
 }: {
   fields: FieldSpec[]
   upload: UploadResponse

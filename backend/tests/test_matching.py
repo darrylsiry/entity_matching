@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from app.matching import cluster, deterministic, fuzzy, normalize
 from app.matching.dedupe import run_dedupe
 from app.matching.pipeline import MatchConfig, run_pipeline
-from app.matching.schema import CanonicalField, norm_col, NORM_DOMAIN
+from app.matching.schema import CanonicalField, norm_col
 from app.matching.scoring import MATCH, REVIEW, Thresholds, combine_and_classify
-
 
 # ---- normalization ---------------------------------------------------------
 
@@ -36,6 +36,36 @@ def test_domain_extraction():
 def test_id_normalization():
     assert normalize.normalize_id("12-3456789") == "123456789"
     assert normalize.normalize_id("GB 123 4567 89") == "gb123456789"
+
+
+def test_name_abbreviation_expansion():
+    # "The Acme Intl Grp" and "Acme International Group" collapse to the same form.
+    assert normalize.normalize_name("The Acme Intl Grp") == "acme international group"
+    assert normalize.normalize_name("The Acme Intl Grp") == normalize.normalize_name(
+        "Acme International Group"
+    )
+    assert normalize.name_tokens(normalize.normalize_name("The Acme Intl Grp")) == \
+        normalize.name_tokens(normalize.normalize_name("Acme International Group"))
+    # "&" / "+" become "and"
+    assert "and" in normalize.normalize_name("Smith & Co").split()
+    assert normalize.normalize_name("Smith & Sons") == normalize.normalize_name("Smith and Sons")
+
+
+def test_country_normalization():
+    for v in ["USA", "U.S.A.", "United States", "us", "US"]:
+        assert normalize.normalize_country(v) == "us", v
+    assert normalize.normalize_country("Canada") == "ca"
+    assert normalize.normalize_country("United Kingdom") == "gb"
+    # unresolvable input passes through cleaned, never dropped
+    assert normalize.normalize_country("Freedonia") == "freedonia"
+    assert normalize.normalize_country("") == ""
+
+
+def test_state_normalization():
+    assert normalize.normalize_state("California") == "ca"
+    assert normalize.normalize_state("CA") == "ca"
+    assert normalize.normalize_state("Ontario") == "on"
+    assert normalize.normalize_state("Bavaria") == "bavaria"  # passthrough
 
 
 def test_id_normalization_rejects_placeholders_and_weak_ids():
@@ -70,11 +100,93 @@ def test_address_conflict_demotes_name_match():
     has = {"addr": True, "city": False, "pc": False}
     a = pd.Series({norm_col(CanonicalField.ADDRESS): "1 market st san francisco ca"})
     b = pd.Series({norm_col(CanonicalField.ADDRESS): "900 pine road boston ma"})
-    demoted = fuzzy.corroborate(0.90, a, b, has)
+    demoted, adj = fuzzy.corroborate(0.90, a, b, has)
     assert demoted < 0.80
+    assert adj == ["addr_conflict"]  # provenance records why the score moved
     # agreeing address nudges up instead
     b2 = pd.Series({norm_col(CanonicalField.ADDRESS): "1 market street san francisco ca"})
-    assert fuzzy.corroborate(0.90, a, b2, has) >= 0.90
+    boosted, adj2 = fuzzy.corroborate(0.90, a, b2, has)
+    assert boosted >= 0.90
+    assert adj2 == ["addr_agree"]
+
+
+def test_phone_normalization():
+    assert normalize.normalize_phone("(415) 867-5309", "US") == "+14158675309"
+    assert normalize.normalize_phone("+44 20 7946 0958", "US") == "+442079460958"
+    # guards: placeholders / too short / all-same-digit / junk -> no signal
+    for bad in ["555-555-1234", "123-456-7890", "0000000", "12345", "not a phone"]:
+        assert normalize.normalize_phone(bad, "US") == "", bad
+
+
+def test_phonetic_blocking_catches_first_char_typos():
+    # "Jonson" vs "Johnson": 4-char prefixes differ (jons/john) but metaphones agree,
+    # so the fuzzy stage still compares them and the typo pair is found.
+    mapping = {CanonicalField.NAME: "name"}
+    a = _frame([{"name": "Jonson"}], mapping)
+    b = _frame([{"name": "Johnson"}], mapping)
+    with_phonetic = fuzzy.match_fuzzy(a, b, threshold=0.8, phonetic=True)
+    assert len(with_phonetic) == 1
+    without = fuzzy.match_fuzzy(a, b, threshold=0.8, phonetic=False)
+    assert without.empty  # prefix-only blocking misses it ("jons" != "john")
+
+
+def test_csv_sanitize_neutralizes_formula_injection():
+    from app.api.routes import _csv_sanitize
+
+    df = pd.DataFrame(
+        {
+            "name": ["=cmd|' /C calc'!A0", "+HYPERLINK(evil)", "-2+3", "@SUM(A1)", "Acme"],
+            "score": [0.9, 0.8, 0.7, 0.6, 0.5],  # numeric column untouched
+        }
+    )
+    out = _csv_sanitize(df)
+    assert all(v.startswith("'") for v in out["name"][:4])
+    assert out["name"].iloc[4] == "Acme"
+    assert list(out["score"]) == list(df["score"])
+
+
+def test_reclassify_without_rerun(monkeypatch):
+    import app.storage as storage
+    from app import service
+
+    allpairs = pd.DataFrame(
+        {
+            "idx_a": [0, 1], "idx_b": [0, 1], "score": [0.95, 0.82],
+            "stage": ["fuzzy", "fuzzy"], "rule": ["r", "r"], "adjustments": ["", ""],
+        }
+    )
+    meta = {"request": {"mode": "link", "file_id_a": "fa", "file_id_b": "fb",
+                        "mapping_a": {"name": "n"}, "mapping_b": {"name": "n"},
+                        "config": {"thresholds": {"match": 0.9, "review": 0.75}}}}
+    raw = pd.DataFrame({"n": ["a", "b"]})
+    saved: dict = {}
+    monkeypatch.setattr(storage, "load_allpairs", lambda sid: allpairs)
+    monkeypatch.setattr(storage, "load_session_meta", lambda sid: meta)
+    monkeypatch.setattr(storage, "load_upload", lambda fid: raw)
+    monkeypatch.setattr(storage, "save_result", lambda sid, f: saved.__setitem__("result", f))
+    monkeypatch.setattr(storage, "save_session_meta", lambda sid, m: saved.__setitem__("meta", m))
+
+    # default thresholds: 1 match (0.95) + 1 review (0.82)
+    out = service.reclassify("s", 0.90, 0.75)
+    assert out["match"] == 1 and out["review"] == 1
+    # lower the match bar to 0.80 -> both become matches, no re-matching involved
+    out = service.reclassify("s", 0.80, 0.75)
+    assert out["match"] == 2 and out["review"] == 0
+    assert saved["meta"]["request"]["config"]["thresholds"]["match"] == 0.80
+    # reconciliation still holds in the stored frame
+    frame = saved["result"]
+    assert (frame["match_class"] == "unique_a").sum() == 0  # both A rows matched
+
+
+def test_per_stage_threshold_override():
+    from app.matching.scoring import classify_pair
+
+    t = Thresholds(match=0.90, review=0.75)
+    # global: 0.85 fuzzy -> review; with a fuzzy-specific match floor of 0.80 -> match
+    assert classify_pair(0.85, "fuzzy", t) == REVIEW
+    assert classify_pair(0.85, "fuzzy", t, {"fuzzy": (0.80, None)}) == MATCH
+    # override on one stage leaves others on the global thresholds
+    assert classify_pair(0.85, "probabilistic", t, {"fuzzy": (0.80, None)}) == REVIEW
 
 
 # ---- deterministic ---------------------------------------------------------
@@ -100,7 +212,49 @@ def test_deterministic_matches_on_domain():
     b = _frame([{"name": "Acme Global", "site": "www.acme.com/contact"}], mapping)
     pairs = deterministic.match_deterministic(a, b)
     assert len(pairs) == 1
-    assert pairs.iloc[0]["rule"] == "domain"
+    # names agree, so the corroboration guard passes it through at full confidence
+    assert pairs.iloc[0]["rule"] == "domain+name_ok"
+    assert pairs.iloc[0]["score"] == deterministic.DETERMINISTIC_SCORE
+
+
+def test_deterministic_corroboration_demotes_conflicting_names():
+    # Same domain, totally unrelated names (e.g. portfolio companies) -> demoted to
+    # the review band instead of a confident 0.99 match.
+    mapping = {CanonicalField.NAME: "name", CanonicalField.WEBSITE: "site"}
+    a = _frame([{"name": "Blue Harbor Dental", "site": "holdco.com"}], mapping)
+    b = _frame([{"name": "Quantum Freight Logistics", "site": "holdco.com"}], mapping)
+    pairs = deterministic.match_deterministic(a, b)
+    assert len(pairs) == 1
+    assert pairs.iloc[0]["rule"] == "domain_name_conflict"
+    assert pairs.iloc[0]["score"] == 0.80
+    # guard off -> back to a confident match
+    pairs_off = deterministic.match_deterministic(a, b, corroboration=False)
+    assert pairs_off.iloc[0]["score"] == deterministic.DETERMINISTIC_SCORE
+
+
+def test_deterministic_phone_key():
+    mapping = {CanonicalField.NAME: "name", CanonicalField.PHONE: "tel"}
+    a = normalize.normalize_frame(
+        pd.DataFrame([{"name": "Acme Inc", "tel": "(415) 867-5309"}]), mapping
+    )
+    b = normalize.normalize_frame(
+        pd.DataFrame([{"name": "Acme", "tel": "+1 415-867-5309"}]), mapping
+    )
+    pairs = deterministic.match_deterministic(a, b)
+    assert len(pairs) == 1
+    assert pairs.iloc[0]["rule"].startswith("phone")
+
+
+def test_registration_id_type_guard():
+    mapping = {CanonicalField.NAME: "name", CanonicalField.REGISTRATION_ID: "id"}
+    a = _frame([{"name": "Acme", "id": "123456789"}], mapping)
+    b = _frame([{"name": "Zeta", "id": "123456789"}], mapping)
+    # incompatible declared types -> the numeric collision does NOT join
+    pairs = deterministic.match_deterministic(a, b, id_type_a="duns", id_type_b="ein")
+    assert pairs[pairs["rule"] == "registration_id"].empty
+    # unknown on one side -> joins as before
+    pairs = deterministic.match_deterministic(a, b, id_type_a="duns", id_type_b="unknown")
+    assert len(pairs[pairs["rule"] == "registration_id"]) == 1
 
 
 # ---- fuzzy -----------------------------------------------------------------
@@ -127,7 +281,7 @@ def test_classification_bands():
         }
     )
     out = combine_and_classify(pairs, t)
-    classes = dict(zip(out["idx_a"], out["match_class"]))
+    classes = dict(zip(out["idx_a"], out["match_class"], strict=False))
     assert classes[0] == MATCH
     assert classes[1] == REVIEW
     assert 2 not in classes  # no_match dropped
@@ -187,10 +341,10 @@ def test_union_find_connected_components():
     # links 0-1 and 1-2 form one cluster; 3 is a singleton.
     links = pd.DataFrame({"idx_a": [0, 1], "idx_b": [1, 2]})
     out = cluster.assign_master_ids(4, links)
-    m = dict(zip(out["row_idx"], out["master_id"]))
+    m = dict(zip(out["row_idx"], out["master_id"], strict=False))
     assert m[0] == m[1] == m[2]
     assert m[3] != m[0]
-    sizes = dict(zip(out["row_idx"], out["cluster_size"]))
+    sizes = dict(zip(out["row_idx"], out["cluster_size"], strict=False))
     assert sizes[0] == 3 and sizes[3] == 1
 
 
@@ -206,7 +360,7 @@ def test_dedupe_clusters_duplicates():
         {"name": "Wayne Enterprises", "ein": ""},          # 4  unique
     ])
     result = run_dedupe(df, mapping, MatchConfig(use_probabilistic=False))
-    m = dict(zip(result.clusters["row_idx"], result.clusters["master_id"]))
+    m = dict(zip(result.clusters["row_idx"], result.clusters["master_id"], strict=False))
     assert m[0] == m[1]           # Acme duplicates share a master id
     assert m[2] == m[3]           # Globex duplicates share a master id
     assert len({m[0], m[2], m[4]}) == 3   # three distinct entities
@@ -248,7 +402,7 @@ def test_dedupe_review_band_becomes_candidate(monkeypatch):
     dedupe_review.set_candidate_decision("s", 0, 1, "confirmed")
     assert dedupe_review.counts("s")["clusters"] == 2
     eff = dedupe_review.effective_clusters("s")
-    m = dict(zip(eff["row_idx"], eff["master_id"]))
+    m = dict(zip(eff["row_idx"], eff["master_id"], strict=False))
     assert m[0] == m[1] and m[0] != m[2]
 
     # Dismissing keeps them apart.

@@ -88,6 +88,32 @@ def result_exists(session_id: str) -> bool:
     return (SESSION_DIR / f"{session_id}_results.parquet").exists()
 
 
+# ---- all stage-emitted pairs (for reclassify-without-rerun, link mode) ------
+
+def save_allpairs(session_id: str, pairs: pd.DataFrame) -> None:
+    pairs.to_parquet(SESSION_DIR / f"{session_id}_allpairs.parquet", index=False)
+
+
+def load_allpairs(session_id: str) -> pd.DataFrame:
+    path = SESSION_DIR / f"{session_id}_allpairs.parquet"
+    if not path.exists():
+        raise FileNotFoundError(f"no stored pair pool for session: {session_id}")
+    return pd.read_parquet(path)
+
+
+# ---- user-supplied ground truth (evaluation feature) -------------------------
+
+def save_ground_truth(session_id: str, df: pd.DataFrame) -> None:
+    df.to_parquet(SESSION_DIR / f"{session_id}_ground_truth.parquet", index=False)
+
+
+def load_ground_truth(session_id: str) -> pd.DataFrame | None:
+    path = SESSION_DIR / f"{session_id}_ground_truth.parquet"
+    if not path.exists():
+        return None
+    return pd.read_parquet(path)
+
+
 # ---- dedupe "possible duplicate" candidates (review-band within-file pairs) ---
 
 def save_candidates(session_id: str, candidates: pd.DataFrame) -> None:

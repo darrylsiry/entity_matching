@@ -4,6 +4,7 @@ import {
   getStatus,
   runSession,
   type Mode,
+  type RegistrationIdType,
   type SessionConfig,
   type StatusResponse,
   type UploadResponse,
@@ -16,11 +17,13 @@ interface Props {
   uploadB: UploadResponse | null
   mappingA: Mapping
   mappingB: Mapping
+  idTypeA: RegistrationIdType
+  idTypeB: RegistrationIdType
   config: SessionConfig
   sessionId: string | null
   setSessionId: (id: string) => void
   onBack: () => void
-  onDone: () => void
+  onDone: (sessionId: string) => void
 }
 
 export function RunStep(props: Props) {
@@ -40,6 +43,8 @@ export function RunStep(props: Props) {
         mapping_a: props.mappingA,
         file_id_b: dedupe ? null : props.uploadB?.file_id,
         mapping_b: dedupe ? {} : props.mappingB,
+        registration_id_type_a: props.idTypeA,
+        registration_id_type_b: props.idTypeB,
         config: props.config,
       })
       props.setSessionId(session_id)
@@ -106,7 +111,11 @@ export function RunStep(props: Props) {
                 <>
                   <Count label="Rows" value={status.counts.records} />
                   <Count label="Entities" value={status.counts.clusters} tone="match" />
-                  <Count label="Duplicate rows" value={status.counts.duplicate_rows} tone="review" />
+                  <Count
+                    label="Duplicate rows"
+                    value={status.counts.duplicate_rows}
+                    tone="review"
+                  />
                   <Count label="Dup. groups" value={status.counts.duplicate_clusters} />
                 </>
               ) : (
@@ -119,16 +128,38 @@ export function RunStep(props: Props) {
               )}
             </div>
           )}
+          {done && status?.counts.stage_timings && (
+            <div className="timings muted small">
+              {Object.entries(status.counts.stage_timings).map(([stage, secs]) => (
+                <span key={stage} className="timing">
+                  {stage.replace(/ \(.*\)/, '')}: <strong>{secs}s</strong>
+                </span>
+              ))}
+              {status.counts.elapsed_seconds != null && (
+                <span className="timing">
+                  total: <strong>{status.counts.elapsed_seconds}s</strong>
+                </span>
+              )}
+            </div>
+          )}
         </div>
       )}
 
       {error && <div className="error">{error}</div>}
 
       <div className="actions">
-        <button className="btn btn-ghost" onClick={props.onBack} disabled={started && !done && !error}>
+        <button
+          className="btn btn-ghost"
+          onClick={props.onBack}
+          disabled={started && !done && !error}
+        >
           ← Back
         </button>
-        <button className="btn btn-primary" disabled={!done} onClick={props.onDone}>
+        <button
+          className="btn btn-primary"
+          disabled={!done || !props.sessionId}
+          onClick={() => props.sessionId && props.onDone(props.sessionId)}
+        >
           View results →
         </button>
       </div>

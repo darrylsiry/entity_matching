@@ -24,6 +24,7 @@ import pandas as pd
 
 from .schema import (
     NORM_DOMAIN,
+    NORM_FIRST_METAPHONE,
     NORM_NAME_TOKENS,
     CanonicalField,
     norm_col,
@@ -35,6 +36,7 @@ _NAME = norm_col(CanonicalField.NAME)
 _ADDRESS = norm_col(CanonicalField.ADDRESS)
 _CITY = norm_col(CanonicalField.CITY)
 _POSTCODE = norm_col(CanonicalField.POSTCODE)
+_PHONE = norm_col(CanonicalField.PHONE)
 
 
 def _empty_pairs() -> pd.DataFrame:
@@ -52,6 +54,10 @@ def match_probabilistic(
     a: pd.DataFrame,
     b: pd.DataFrame,
     threshold: float = 0.75,
+    *,
+    use_phone: bool = True,
+    phonetic_blocking: bool = True,
+    tf_adjustments: bool = True,
 ) -> pd.DataFrame:
     """Cross-file pairs (idx_a in A, idx_b in B) with match_probability >= threshold."""
     return _run(
@@ -61,12 +67,19 @@ def match_probabilistic(
         has_signal=lambda col: _both_have(a, b, col),
         threshold=threshold,
         orient=_orient_link_only,
+        use_phone=use_phone,
+        phonetic_blocking=phonetic_blocking,
+        tf_adjustments=tf_adjustments,
     )
 
 
 def match_probabilistic_within(
     a: pd.DataFrame,
     threshold: float = 0.75,
+    *,
+    use_phone: bool = True,
+    phonetic_blocking: bool = True,
+    tf_adjustments: bool = True,
 ) -> pd.DataFrame:
     """Within-file pairs (both idx_a and idx_b index the same frame) for dedupe."""
     return _run(
@@ -76,6 +89,9 @@ def match_probabilistic_within(
         has_signal=lambda col: _one_has(a, col),
         threshold=threshold,
         orient=_orient_dedupe,
+        use_phone=use_phone,
+        phonetic_blocking=phonetic_blocking,
+        tf_adjustments=tf_adjustments,
     )
 
 
@@ -89,7 +105,17 @@ def _one_has(a: pd.DataFrame, col: str) -> bool:
     return col in a and (a[col] != "").any()
 
 
-def _run(frames, aliases, link_type, has_signal, threshold, orient) -> pd.DataFrame:
+def _run(
+    frames,
+    aliases,
+    link_type,
+    has_signal,
+    threshold,
+    orient,
+    use_phone=True,
+    phonetic_blocking=True,
+    tf_adjustments=True,
+) -> pd.DataFrame:
     try:
         import splink.comparison_library as cl
         from splink import DuckDBAPI, Linker, SettingsCreator, block_on
@@ -107,6 +133,21 @@ def _run(frames, aliases, link_type, has_signal, threshold, orient) -> pd.DataFr
         def block_nonempty(col: str):
             return block_on(f"NULLIF({col}, '')")
 
+        def with_tf(comparison):
+            """Enable term-frequency adjustments, falling back untouched on failure.
+
+            TF makes agreement on a *rare* value count for more than agreement on a
+            common one ("Zyxwv Corp" >> "Global Services"). Guarded so an API change
+            in Splink degrades to the plain comparison instead of killing the stage.
+            """
+            if not tf_adjustments:
+                return comparison
+            try:
+                return comparison.configure(term_frequency_adjustments=True)
+            except Exception as exc:  # pragma: no cover - version drift guard
+                logger.info("TF adjustments unavailable for %s: %s", comparison, exc)
+                return comparison
+
         blocking_rules = []
         if has_signal(NORM_NAME_TOKENS):
             blocking_rules.append(block_nonempty(NORM_NAME_TOKENS))
@@ -114,20 +155,27 @@ def _run(frames, aliases, link_type, has_signal, threshold, orient) -> pd.DataFr
             blocking_rules.append(block_nonempty(_POSTCODE))
         if has_signal(NORM_DOMAIN):
             blocking_rules.append(block_nonempty(NORM_DOMAIN))
+        if use_phone and has_signal(_PHONE):
+            blocking_rules.append(block_nonempty(_PHONE))
+        if phonetic_blocking and has_signal(NORM_FIRST_METAPHONE):
+            # Phonetic key survives typos in the first characters ("Jonson"/"Johnson").
+            blocking_rules.append(block_nonempty(NORM_FIRST_METAPHONE))
         if not blocking_rules:
             blocking_rules.append(block_on(f"substr({_NAME}, 1, 4)"))
 
         comparisons = []
         if has_signal(_NAME):
-            comparisons.append(cl.JaroWinklerAtThresholds(_NAME, [0.9, 0.8]))
+            comparisons.append(with_tf(cl.JaroWinklerAtThresholds(_NAME, [0.9, 0.8])))
         if has_signal(NORM_DOMAIN):
             comparisons.append(cl.ExactMatch(NORM_DOMAIN))
+        if use_phone and has_signal(_PHONE):
+            comparisons.append(cl.ExactMatch(_PHONE))
         if has_signal(_ADDRESS):
             comparisons.append(cl.LevenshteinAtThresholds(_ADDRESS, [2, 5]))
         if has_signal(_POSTCODE):
             comparisons.append(cl.ExactMatch(_POSTCODE))
         if has_signal(_CITY):
-            comparisons.append(cl.ExactMatch(_CITY))
+            comparisons.append(with_tf(cl.ExactMatch(_CITY)))
         if not comparisons:
             return _empty_pairs()
 

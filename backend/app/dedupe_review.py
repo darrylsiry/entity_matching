@@ -34,7 +34,7 @@ def set_candidate_decision(session_id: str, idx_a: int, idx_b: int, decision: st
     """Confirm / dismiss / clear a possible-duplicate candidate."""
     cands = storage.load_candidates(session_id)
     key = pair_key(idx_a, idx_b)
-    known = {pair_key(a, b) for a, b in zip(cands["idx_a"], cands["idx_b"])}
+    known = {pair_key(a, b) for a, b in zip(cands["idx_a"], cands["idx_b"], strict=False)}
     if key not in known:
         raise KeyError("no candidate pair for those rows")
 
@@ -65,7 +65,7 @@ def effective_clusters(session_id: str) -> pd.DataFrame:
 
     cands = storage.load_candidates(session_id)
     decisions = get_decisions(session_id)
-    for a, b in zip(cands["idx_a"], cands["idx_b"]):
+    for a, b in zip(cands["idx_a"], cands["idx_b"], strict=False):
         if decisions.get(pair_key(a, b)) == CONFIRMED:
             links.append((int(a), int(b)))
 
@@ -82,7 +82,7 @@ def candidate_view(session_id: str) -> pd.DataFrame:
         return cands
     decisions = get_decisions(session_id)
     cands["decision"] = [
-        decisions.get(pair_key(a, b)) for a, b in zip(cands["idx_a"], cands["idx_b"])
+        decisions.get(pair_key(a, b)) for a, b in zip(cands["idx_a"], cands["idx_b"], strict=False)
     ]
     return cands
 

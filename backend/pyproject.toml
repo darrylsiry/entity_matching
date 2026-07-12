@@ -1,0 +1,25 @@
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+extend-exclude = [".venv", "data"]
+
+[tool.ruff.lint]
+# E/W pycodestyle, F pyflakes, I import order, B bugbear, UP pyupgrade, SIM simplify
+select = ["E", "W", "F", "I", "B", "UP", "SIM"]
+ignore = [
+  "E501",   # long lines: docstrings/comments read better unwrapped; code stays ~100
+  "SIM108", # ternary rewrites often hurt readability
+  "B008",   # FastAPI's `param: UploadFile = File(...)` DI idiom triggers this
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests favor readable literal blocks over abstraction.
+"tests/*" = ["SIM117"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+check_untyped_defs = true
+no_implicit_optional = true
+warn_unused_ignores = true
+exclude = ["\\.venv", "data"]

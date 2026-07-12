@@ -7,6 +7,7 @@ back into full source records for the results/download endpoints.
 from __future__ import annotations
 
 import logging
+import time
 
 import pandas as pd
 
@@ -21,7 +22,13 @@ from .models import CreateSessionRequest
 logger = logging.getLogger(__name__)
 
 
-def _to_match_config(cfg) -> MatchConfig:
+def _to_match_config(req: CreateSessionRequest) -> MatchConfig:
+    cfg = req.config
+    stage_thresholds = None
+    if cfg.stage_thresholds:
+        stage_thresholds = {
+            stage: (o.match, o.review) for stage, o in cfg.stage_thresholds.items()
+        }
     return MatchConfig(
         use_deterministic=cfg.use_deterministic,
         use_probabilistic=cfg.use_probabilistic,
@@ -29,20 +36,58 @@ def _to_match_config(cfg) -> MatchConfig:
         thresholds=Thresholds(match=cfg.thresholds.match, review=cfg.thresholds.review),
         fuzzy_threshold=cfg.fuzzy_threshold,
         probabilistic_threshold=cfg.probabilistic_threshold,
+        use_phone=cfg.use_phone,
+        default_phone_region=cfg.default_phone_region,
+        use_phonetic_blocking=cfg.use_phonetic_blocking,
+        splink_tf_adjustments=cfg.splink_tf_adjustments,
+        deterministic_corroboration=cfg.deterministic_corroboration,
+        deterministic_name_floor=cfg.deterministic_name_floor,
+        deterministic_demoted_score=cfg.deterministic_demoted_score,
+        stage_thresholds=stage_thresholds,
+        registration_id_type_a=req.registration_id_type_a,
+        registration_id_type_b=req.registration_id_type_b,
     )
+
+
+class _StageTimer:
+    """Wraps the progress callback to record how long each pipeline stage took."""
+
+    def __init__(self, session_id: str) -> None:
+        self.session_id = session_id
+        self.timings: dict[str, float] = {}
+        self._current: str | None = None
+        self._started = 0.0
+
+    def __call__(self, stage: str, p: float) -> None:
+        now = time.monotonic()
+        if self._current is not None and stage != self._current:
+            self.timings[self._current] = round(
+                self.timings.get(self._current, 0.0) + (now - self._started), 2
+            )
+        if stage != self._current:
+            self._current, self._started = stage, now
+        registry.update(self.session_id, stage=stage, progress=round(p, 3))
+
+    def finish(self) -> dict[str, float]:
+        now = time.monotonic()
+        if self._current is not None:
+            self.timings[self._current] = round(
+                self.timings.get(self._current, 0.0) + (now - self._started), 2
+            )
+        self.timings.pop("Done", None)  # terminal marker, not a real stage
+        return self.timings
 
 
 def run_match_job(session_id: str) -> None:
     """Background entrypoint: execute the pipeline (link or dedupe) and persist."""
     registry.update(session_id, state=JobState.RUNNING, stage="loading", progress=0.0)
+    started = time.monotonic()
     try:
         meta = storage.load_session_meta(session_id)
         req = CreateSessionRequest(**meta["request"])
+        progress = _StageTimer(session_id)
 
-        def progress(stage: str, p: float) -> None:
-            registry.update(session_id, stage=stage, progress=round(p, 3))
-
-        config = _to_match_config(req.config)
+        config = _to_match_config(req)
         raw_a = storage.load_upload(req.file_id_a)
         mapping_a = {CanonicalField(k): v for k, v in req.mapping_a.items()}
 
@@ -57,8 +102,18 @@ def run_match_job(session_id: str) -> None:
             result = run_pipeline(raw_a, raw_b, mapping_a, mapping_b, config, progress)
             # Store matched pairs + single-sided unique rows so results reconcile.
             storage.save_result(session_id, result.storage_frame())
+            # Keep ALL stage-emitted pairs so thresholds can be changed and results
+            # re-classified later without re-running the pipeline.
+            storage.save_allpairs(session_id, result.raw_pairs)
             counts = result.counts
 
+        counts = dict(counts)
+        counts["stage_timings"] = progress.finish()
+        counts["elapsed_seconds"] = round(time.monotonic() - started, 2)
+        logger.info(
+            "match job done session=%s mode=%s elapsed=%.2fs timings=%s",
+            session_id, req.mode, counts["elapsed_seconds"], counts["stage_timings"],
+        )
         registry.update(
             session_id, state=JobState.DONE, stage="Done", progress=1.0, counts=counts
         )
@@ -77,12 +132,16 @@ def enrich_pairs(
     raw_b = storage.load_upload(req.file_id_b)
 
     has_decision = "decision" in pairs.columns
+    has_adjustments = "adjustments" in pairs.columns
     out = []
     for _, row in pairs.iterrows():
         ia, ib = int(row["idx_a"]), int(row["idx_b"])
         decision = row["decision"] if has_decision else None
         if decision is not None and pd.isna(decision):
             decision = None
+        adjustments = str(row["adjustments"]) if has_adjustments else ""
+        if adjustments == "nan":
+            adjustments = ""
         out.append(
             {
                 "idx_a": ia,
@@ -90,6 +149,7 @@ def enrich_pairs(
                 "score": float(row["score"]),
                 "stage": row["stage"],
                 "rule": row["rule"],
+                "adjustments": adjustments,
                 "match_class": row["match_class"],
                 "decision": decision,
                 "record_a": _record(raw_a, ia),
@@ -140,6 +200,58 @@ def dedupe_download_frame(session_id: str, cluster_rows: pd.DataFrame) -> pd.Dat
     return out
 
 
+def reclassify(session_id: str, match_t: float, review_t: float) -> dict:
+    """Re-run Stage 4 (classification only) with new thresholds — no re-matching.
+
+    Uses the stored all-pairs frame, rebuilds the reconciled results frame, persists
+    it, and updates the session's saved thresholds. Existing review decisions are kept
+    (they only apply to pairs that still classify as review). Raises FileNotFoundError
+    when the session has no stored all-pairs (e.g. pre-feature or dedupe sessions).
+    """
+    from .matching.pipeline import _unique_frame
+    from .matching.scoring import MATCH, REVIEW, Thresholds, combine_and_classify
+
+    allpairs = storage.load_allpairs(session_id)
+    meta = storage.load_session_meta(session_id)
+    req = CreateSessionRequest(**meta["request"])
+    if req.mode != "link":
+        raise ValueError("re-classification is only available for two-file sessions")
+
+    thresholds = Thresholds(match=match_t, review=review_t)
+    stage_over = None
+    if req.config.stage_thresholds:
+        stage_over = {
+            s: (o.match, o.review) for s, o in req.config.stage_thresholds.items()
+        }
+    classified = combine_and_classify(allpairs, thresholds, stage_thresholds=stage_over)
+
+    raw_a = storage.load_upload(req.file_id_a)
+    raw_b = storage.load_upload(req.file_id_b)
+    matched_a = set(classified["idx_a"].tolist())
+    matched_b = set(classified["idx_b"].tolist())
+    unique = _unique_frame(
+        [i for i in range(len(raw_a)) if i not in matched_a],
+        [i for i in range(len(raw_b)) if i not in matched_b],
+    )
+    frame = (
+        pd.concat([classified, unique], ignore_index=True) if not unique.empty
+        else classified
+    )
+    storage.save_result(session_id, frame)
+
+    # Persist the new thresholds so future reads/exports are consistent.
+    meta["request"]["config"]["thresholds"] = {"match": match_t, "review": review_t}
+    storage.save_session_meta(session_id, meta)
+
+    return {
+        "match": int((classified["match_class"] == MATCH).sum()),
+        "review": int((classified["match_class"] == REVIEW).sum()),
+        # The stored pool can't produce pairs below the lowest score any stage
+        # emitted at run time; tell the caller where the floor is.
+        "min_stored_score": float(allpairs["score"].min()) if len(allpairs) else None,
+    }
+
+
 def enrich_candidates(session_id: str, cand_rows: pd.DataFrame) -> list[dict]:
     """Attach the two rows' records to each possible-duplicate candidate pair."""
     raw = load_dedupe_source(session_id)
@@ -149,12 +261,18 @@ def enrich_candidates(session_id: str, cand_rows: pd.DataFrame) -> list[dict]:
         decision = r["decision"] if "decision" in cand_rows.columns else None
         if decision is not None and pd.isna(decision):
             decision = None
+        adjustments = (
+            str(r["adjustments"]) if "adjustments" in cand_rows.columns else ""
+        )
+        if adjustments == "nan":
+            adjustments = ""
         out.append(
             {
                 "idx_a": ia,
                 "idx_b": ib,
                 "score": float(r["score"]),
                 "stage": r["stage"],
+                "adjustments": adjustments,
                 "decision": decision,
                 "record_a": _record(raw, ia),
                 "record_b": _record(raw, ib),

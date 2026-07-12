@@ -39,10 +39,21 @@ def _unavailable(reason: str) -> dict:
     return {"available": False, "reason": reason}
 
 
+def _load_gt_frame(session_id: str) -> tuple[pd.DataFrame | None, str]:
+    """Session-uploaded ground truth wins; the repo file is the developer fallback."""
+    session_gt = storage.load_ground_truth(session_id)
+    if session_gt is not None:
+        return session_gt, "uploaded"
+    if GROUND_TRUTH_PATH.exists():
+        return pd.read_csv(GROUND_TRUTH_PATH, dtype=str, keep_default_na=False), "repo"
+    return None, "none"
+
+
 def evaluate(session_id: str) -> dict:
     """Return precision/recall/F1 of the session's matches vs ground truth."""
-    if not GROUND_TRUTH_PATH.exists():
-        return _unavailable("ground_truth_matches.csv not found")
+    gt, gt_source = _load_gt_frame(session_id)
+    if gt is None:
+        return _unavailable("no ground-truth file (upload one to evaluate)")
 
     meta = storage.load_session_meta(session_id)
     req = CreateSessionRequest(**meta["request"])
@@ -54,10 +65,9 @@ def evaluate(session_id: str) -> dict:
     if not name_col_a or not name_col_b or not req.file_id_b:
         return _unavailable("company name not mapped")
 
-    gt = pd.read_csv(GROUND_TRUTH_PATH, dtype=str, keep_default_na=False)
     if "file_a_name" not in gt.columns or "file_b_name" not in gt.columns:
         return _unavailable("unexpected ground-truth columns")
-    gt_pairs = {(_norm(a), _norm(b)) for a, b in zip(gt["file_a_name"], gt["file_b_name"])}
+    gt_pairs = {(_norm(a), _norm(b)) for a, b in zip(gt["file_a_name"], gt["file_b_name"], strict=False)}
     gt_a_names = {a for a, _ in gt_pairs}
 
     raw_a = storage.load_upload(req.file_id_a)
@@ -82,10 +92,14 @@ def evaluate(session_id: str) -> dict:
     recall = tp / (tp + fn) if (tp + fn) else 0.0
     f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
 
+    suggestion = _suggest_threshold(session_id, req, gt_pairs, name_col_a, name_col_b,
+                                    raw_a, raw_b)
+
     return {
         "available": True,
         "applicable": applicable,
         "reason": None if applicable else "uploaded data doesn't match this ground truth",
+        "gt_source": gt_source,
         "precision": round(precision, 4),
         "recall": round(recall, 4),
         "f1": round(f1, 4),
@@ -94,4 +108,59 @@ def evaluate(session_id: str) -> dict:
         "fn": fn,
         "ground_truth_total": len(gt_pairs),
         "predicted_total": len(predicted),
+        **(suggestion or {}),
     }
+
+
+def _suggest_threshold(
+    session_id: str,
+    req: CreateSessionRequest,
+    gt_pairs: set[tuple[str, str]],
+    name_col_a: str,
+    name_col_b: str,
+    raw_a: pd.DataFrame,
+    raw_b: pd.DataFrame,
+) -> dict | None:
+    """Sweep the match threshold over the stored pair pool and report the best-F1 point.
+
+    Turns threshold tuning from guesswork into measurement: for each candidate
+    threshold, pairs scoring >= it count as matches; P/R/F1 are computed against the
+    ground truth. Returns None when no pair pool is stored (older sessions).
+    """
+    try:
+        pool = storage.load_allpairs(session_id)
+    except FileNotFoundError:
+        return None
+    if pool.empty:
+        return None
+
+    # Best pair per A record (same rule Stage 4 applies), with names resolved once.
+    best = pool.sort_values("score", ascending=False).drop_duplicates(subset=["idx_a"])
+    names_a = raw_a[name_col_a].map(_norm)
+    names_b = raw_b[name_col_b].map(_norm)
+    scored = [
+        (float(r.score), (names_a.iat[int(r.idx_a)], names_b.iat[int(r.idx_b)]))
+        for r in best.itertuples(index=False)
+        if 0 <= int(r.idx_a) < len(names_a) and 0 <= int(r.idx_b) < len(names_b)
+    ]
+    if not scored:
+        return None
+
+    total_gt = len(gt_pairs)
+    candidates = sorted({round(s, 2) for s, _ in scored})
+    best_point: dict | None = None
+    for t in candidates:
+        predicted = {pair for s, pair in scored if s >= t}
+        tp = len(predicted & gt_pairs)
+        fp = len(predicted - gt_pairs)
+        precision = tp / (tp + fp) if tp + fp else 0.0
+        recall = tp / total_gt if total_gt else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+        if best_point is None or f1 > best_point["suggested_f1"]:
+            best_point = {
+                "suggested_match_threshold": t,
+                "suggested_precision": round(precision, 4),
+                "suggested_recall": round(recall, 4),
+                "suggested_f1": round(f1, 4),
+            }
+    return best_point

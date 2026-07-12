@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import {
   getFields,
+  getStatus,
   type FieldSpec,
   type Mode,
+  type RegistrationIdType,
   type SessionConfig,
   type UploadResponse,
 } from './api'
@@ -23,13 +25,59 @@ const STEPS: Record<Mode, string[]> = {
   dedupe: ['Mode', 'Upload', 'Configure', 'Run', 'Results'],
 }
 
-const DEFAULT_CONFIG: SessionConfig = {
+export const DEFAULT_CONFIG: SessionConfig = {
   use_deterministic: true,
   use_probabilistic: true,
   use_fuzzy: true,
   thresholds: { match: 0.9, review: 0.75 },
   fuzzy_threshold: 0.8,
   probabilistic_threshold: 0.75,
+  use_phone: true,
+  default_phone_region: 'US',
+  use_phonetic_blocking: true,
+  splink_tf_adjustments: true,
+  deterministic_corroboration: true,
+  deterministic_name_floor: 0.3,
+  deterministic_demoted_score: 0.8,
+  stage_thresholds: null,
+}
+
+// ---- session persistence: results survive refresh and are link-shareable ----
+// The completed session lives in the URL hash (#s=<id>&m=<mode>) and localStorage.
+
+const STORAGE_KEY = 'entity-matching:last-session'
+
+interface SavedSession {
+  sessionId: string
+  mode: Mode
+}
+
+function readSavedSession(): SavedSession | null {
+  const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''))
+  const fromHash = hash.get('s')
+  if (fromHash) {
+    return { sessionId: fromHash, mode: hash.get('m') === 'dedupe' ? 'dedupe' : 'link' }
+  }
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    return raw ? (JSON.parse(raw) as SavedSession) : null
+  } catch {
+    return null
+  }
+}
+
+function saveSession(saved: SavedSession | null) {
+  try {
+    if (saved) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(saved))
+      window.history.replaceState(null, '', `#s=${saved.sessionId}&m=${saved.mode}`)
+    } else {
+      localStorage.removeItem(STORAGE_KEY)
+      window.history.replaceState(null, '', window.location.pathname)
+    }
+  } catch {
+    /* private mode etc. — persistence is best-effort */
+  }
 }
 
 export default function App() {
@@ -41,11 +89,25 @@ export default function App() {
   const [uploadB, setUploadB] = useState<UploadResponse | null>(null)
   const [mappingA, setMappingA] = useState<Mapping>({})
   const [mappingB, setMappingB] = useState<Mapping>({})
+  const [idTypeA, setIdTypeA] = useState<RegistrationIdType>('unknown')
+  const [idTypeB, setIdTypeB] = useState<RegistrationIdType>('unknown')
   const [config, setConfig] = useState<SessionConfig>(DEFAULT_CONFIG)
   const [sessionId, setSessionId] = useState<string | null>(null)
+  const [resumable, setResumable] = useState<SavedSession | null>(null)
 
   useEffect(() => {
-    getFields().then(setFields).catch(() => setFields([]))
+    getFields()
+      .then(setFields)
+      .catch(() => setFields([]))
+    // Offer to resume a previous session if its results still exist on the server.
+    const saved = readSavedSession()
+    if (saved) {
+      getStatus(saved.sessionId)
+        .then((st) => {
+          if (st.state === 'done') setResumable(saved)
+        })
+        .catch(() => saveSession(null))
+    }
   }, [])
 
   const steps = STEPS[mode]
@@ -56,8 +118,11 @@ export default function App() {
     setUploadB(null)
     setMappingA({})
     setMappingB({})
+    setIdTypeA('unknown')
+    setIdTypeB('unknown')
     setConfig(DEFAULT_CONFIG)
     setSessionId(null)
+    saveSession(null)
     setStep(0)
   }
 
@@ -66,6 +131,19 @@ export default function App() {
   function chooseMode(m: Mode) {
     setMode(m)
     setStep(1) // -> Upload
+  }
+
+  function resume() {
+    if (!resumable) return
+    setMode(resumable.mode)
+    setSessionId(resumable.sessionId)
+    setResumable(null)
+    setStep(STEPS[resumable.mode].indexOf('Results'))
+  }
+
+  function onRunComplete(id: string) {
+    saveSession({ sessionId: id, mode })
+    go('Results')
   }
 
   // Leaving Upload: dedupe auto-maps its single file and skips column mapping.
@@ -98,6 +176,26 @@ export default function App() {
       </ol>
 
       <main className="panel">
+        {current === 'Mode' && resumable && (
+          <div className="resume-banner">
+            <span>
+              You have previous {resumable.mode === 'dedupe' ? 'deduplication' : 'matching'}{' '}
+              results.
+            </span>
+            <button className="btn btn-sm btn-primary" onClick={resume}>
+              Resume results →
+            </button>
+            <button
+              className="btn btn-sm btn-ghost"
+              onClick={() => {
+                saveSession(null)
+                setResumable(null)
+              }}
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
         {current === 'Mode' && <ModeStep mode={mode} onChoose={chooseMode} />}
 
         {current === 'Upload' && (
@@ -121,6 +219,10 @@ export default function App() {
             mappingB={mappingB}
             setMappingA={setMappingA}
             setMappingB={setMappingB}
+            idTypeA={idTypeA}
+            idTypeB={idTypeB}
+            setIdTypeA={setIdTypeA}
+            setIdTypeB={setIdTypeB}
             onBack={() => go('Upload')}
             onNext={() => go('Configure')}
           />
@@ -147,11 +249,13 @@ export default function App() {
             uploadB={uploadB}
             mappingA={mappingA}
             mappingB={mappingB}
+            idTypeA={idTypeA}
+            idTypeB={idTypeB}
             config={config}
             sessionId={sessionId}
             setSessionId={setSessionId}
             onBack={() => go('Configure')}
-            onDone={() => go('Results')}
+            onDone={onRunComplete}
           />
         )}
 

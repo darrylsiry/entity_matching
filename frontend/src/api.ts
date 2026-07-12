@@ -1,24 +1,22 @@
 // Typed client for the entity-matching backend. All calls go through the Vite proxy
 // (see vite.config.ts) so paths are same-origin.
+//
+// Core models are ALIASED from src/api-schema.d.ts, which is generated from the
+// backend's OpenAPI schema (`npm run gen:api`) — so a backend model change shows up
+// here as a compile error instead of silent drift. Container types whose generated
+// typing is too loose (e.g. StatusResponse's freeform counts dict) stay hand-written.
+import type { components } from './api-schema'
 
-export interface ColumnInfo {
-  name: string
-  sample: string[]
-}
+type Schemas = components['schemas']
 
-export interface UploadResponse {
-  file_id: string
-  filename: string
-  rows: number
-  columns: ColumnInfo[]
-}
-
-export interface FieldSpec {
-  field: string
-  label: string
-  required: boolean
-  help: string
-}
+export type ColumnInfo = Schemas['ColumnInfo']
+export type UploadResponse = Schemas['UploadResponse']
+export type FieldSpec = Schemas['FieldSpecOut']
+export type MatchPair = Schemas['MatchPair']
+export type DedupeCandidate = Schemas['DedupeCandidate']
+export type Cluster = Schemas['ClusterOut']
+export type ClusterMember = Schemas['ClusterMember']
+export type Evaluation = Schemas['EvaluationResponse']
 
 export interface SessionConfig {
   use_deterministic: boolean
@@ -27,6 +25,22 @@ export interface SessionConfig {
   thresholds: { match: number; review: number }
   fuzzy_threshold: number
   probabilistic_threshold: number
+  use_phone: boolean
+  default_phone_region: string
+  use_phonetic_blocking: boolean
+  splink_tf_adjustments: boolean
+  deterministic_corroboration: boolean
+  deterministic_name_floor: number
+  deterministic_demoted_score: number
+  stage_thresholds?: Record<string, { match?: number | null; review?: number | null }> | null
+}
+
+export type RegistrationIdType =
+  'unknown' | 'duns' | 'ein' | 'vat' | 'company_number' | 'lei' | 'other'
+
+// Summary counts; stage_timings is a nested {stage: seconds} object.
+export type Counts = Record<string, number> & {
+  stage_timings?: Record<string, number>
 }
 
 export interface StatusResponse {
@@ -35,19 +49,7 @@ export interface StatusResponse {
   stage: string
   progress: number
   error: string | null
-  counts: Record<string, number>
-}
-
-export interface MatchPair {
-  idx_a: number
-  idx_b: number
-  score: number
-  stage: string
-  rule: string
-  match_class: string
-  decision: string | null
-  record_a: Record<string, string>
-  record_b: Record<string, string>
+  counts: Counts
 }
 
 export type Decision = 'confirmed' | 'dismissed' | 'pending'
@@ -63,17 +65,6 @@ export interface ResultsResponse {
 
 export type Mode = 'link' | 'dedupe'
 
-export interface ClusterMember {
-  row_idx: number
-  record: Record<string, string>
-}
-
-export interface Cluster {
-  master_id: number
-  size: number
-  members: ClusterMember[]
-}
-
 export interface ClustersResponse {
   session_id: string
   total: number
@@ -81,16 +72,6 @@ export interface ClustersResponse {
   page_size: number
   counts: Record<string, number>
   clusters: Cluster[]
-}
-
-export interface DedupeCandidate {
-  idx_a: number
-  idx_b: number
-  score: number
-  stage: string
-  decision: string | null
-  record_a: Record<string, string>
-  record_b: Record<string, string>
 }
 
 export interface CandidatesResponse {
@@ -131,6 +112,8 @@ export async function createSession(body: {
   mapping_a: Record<string, string>
   file_id_b?: string | null
   mapping_b?: Record<string, string>
+  registration_id_type_a?: RegistrationIdType
+  registration_id_type_b?: RegistrationIdType
   config: SessionConfig
 }): Promise<{ session_id: string }> {
   return jsonOrThrow(
@@ -172,22 +155,47 @@ export async function getClusters(
   return jsonOrThrow(await fetch(`/api/session/${sessionId}/clusters?${p}`))
 }
 
-export interface Evaluation {
-  available: boolean
-  applicable: boolean
-  reason: string | null
-  precision: number
-  recall: number
-  f1: number
-  tp: number
-  fp: number
-  fn: number
-  ground_truth_total: number
-  predicted_total: number
-}
-
 export async function getEvaluation(sessionId: string): Promise<Evaluation> {
   return jsonOrThrow(await fetch(`/api/session/${sessionId}/evaluation`))
+}
+
+export async function uploadGroundTruth(sessionId: string, file: File): Promise<Evaluation> {
+  const form = new FormData()
+  form.append('file', file)
+  return jsonOrThrow(
+    await fetch(`/api/session/${sessionId}/ground_truth`, {
+      method: 'POST',
+      body: form,
+    }),
+  )
+}
+
+export async function reclassify(
+  sessionId: string,
+  match: number,
+  review: number,
+): Promise<{ session_id: string; match: number; review: number; counts: Counts }> {
+  return jsonOrThrow(
+    await fetch(`/api/session/${sessionId}/reclassify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ match, review }),
+    }),
+  )
+}
+
+export async function postBulkDecisions(
+  sessionId: string,
+  pairs: { idx_a: number; idx_b: number }[],
+  decision: Decision,
+): Promise<{ session_id: string; counts: Counts }> {
+  return jsonOrThrow(
+    await fetch(`/api/session/${sessionId}/decisions/bulk`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pairs: pairs.map((p) => ({ ...p, decision })) }),
+    }),
+  )
 }
 
 export async function postDecision(

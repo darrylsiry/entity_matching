@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import type { FieldSpec, UploadResponse } from '../api'
+import type { FieldSpec, RegistrationIdType, UploadResponse } from '../api'
 import { autoMap, type Mapping } from '../mapping'
 import { FieldMapper } from './FieldMapper'
 
@@ -11,8 +11,43 @@ interface Props {
   mappingB: Mapping
   setMappingA: (m: Mapping) => void
   setMappingB: (m: Mapping) => void
+  idTypeA: RegistrationIdType
+  idTypeB: RegistrationIdType
+  setIdTypeA: (t: RegistrationIdType) => void
+  setIdTypeB: (t: RegistrationIdType) => void
   onBack: () => void
   onNext: () => void
+}
+
+const ID_TYPES: { value: RegistrationIdType; label: string }[] = [
+  { value: 'unknown', label: 'Unknown / mixed' },
+  { value: 'duns', label: 'DUNS' },
+  { value: 'ein', label: 'EIN' },
+  { value: 'vat', label: 'VAT' },
+  { value: 'company_number', label: 'Company number' },
+  { value: 'lei', label: 'LEI' },
+  { value: 'other', label: 'Other' },
+]
+
+function IdTypeSelect({
+  value,
+  onChange,
+}: {
+  value: RegistrationIdType
+  onChange: (t: RegistrationIdType) => void
+}) {
+  return (
+    <div className="id-type-row">
+      <label className="muted small">ID type</label>
+      <select value={value} onChange={(e) => onChange(e.target.value as RegistrationIdType)}>
+        {ID_TYPES.map((t) => (
+          <option key={t.value} value={t.value}>
+            {t.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  )
 }
 
 export function ColumnMapStep(props: Props) {
@@ -27,18 +62,50 @@ export function ColumnMapStep(props: Props) {
   }, [fields, uploadA, uploadB])
 
   const nameMapped = Boolean(mappingA['name'] && mappingB['name'])
+  // Different declared id types on the two files means numeric collisions (a DUNS
+  // matching an EIN) won't be treated as the same company.
+  const idTypesDiffer =
+    props.idTypeA !== 'unknown' && props.idTypeB !== 'unknown' && props.idTypeA !== props.idTypeB
 
   return (
     <div>
       <h2>Map columns to fields</h2>
       <p className="muted">
-        Tell us which column holds each piece of company info. We&apos;ve guessed where we
-        can. <strong>Company name</strong> is required; everything else improves accuracy.
+        Tell us which column holds each piece of company info. We&apos;ve guessed where we can.{' '}
+        <strong>Company name</strong> is required; everything else improves accuracy.
       </p>
       <div className="map-grid">
-        <FieldMapper title="File A" upload={uploadA} fields={fields} mapping={mappingA} setMapping={setMappingA} />
-        <FieldMapper title="File B" upload={uploadB} fields={fields} mapping={mappingB} setMapping={setMappingB} />
+        <div>
+          <FieldMapper
+            title="File A"
+            upload={uploadA}
+            fields={fields}
+            mapping={mappingA}
+            setMapping={setMappingA}
+          />
+          {mappingA['registration_id'] && (
+            <IdTypeSelect value={props.idTypeA} onChange={props.setIdTypeA} />
+          )}
+        </div>
+        <div>
+          <FieldMapper
+            title="File B"
+            upload={uploadB}
+            fields={fields}
+            mapping={mappingB}
+            setMapping={setMappingB}
+          />
+          {mappingB['registration_id'] && (
+            <IdTypeSelect value={props.idTypeB} onChange={props.setIdTypeB} />
+          )}
+        </div>
       </div>
+      {idTypesDiffer && (
+        <p className="muted small review-hint">
+          The two files declare different ID types ({props.idTypeA} vs {props.idTypeB}), so IDs
+          won&apos;t be joined across them — matching will rely on the other fields.
+        </p>
+      )}
       {!nameMapped && <div className="error">Map the company name in both files to continue.</div>}
       <div className="actions">
         <button className="btn btn-ghost" onClick={props.onBack}>

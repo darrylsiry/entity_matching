@@ -2,7 +2,7 @@
 
     raw A, raw B
         -> normalize (stage 0)
-        -> deterministic  (stage 1)   strong-id / domain exact
+        -> deterministic  (stage 1)   strong-id / domain / phone exact
         -> probabilistic  (stage 2)   Splink, on records not yet resolved
         -> fuzzy fallback (stage 3)   rapidfuzz, on records still unresolved
         -> combine + classify (stage 4)
@@ -14,22 +14,23 @@ job layer surface stage-by-stage status to the UI.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 import pandas as pd
 
 from . import deterministic, fuzzy, probabilistic
 from .normalize import normalize_frame
+from .schema import CanonicalField
 from .scoring import (
     MATCH,
+    PAIR_COLS,
     REVIEW,
     UNIQUE_A,
     UNIQUE_B,
     Thresholds,
     combine_and_classify,
 )
-from .schema import CanonicalField
 
 ProgressCb = Callable[[str, float], None]  # (stage label, progress 0..1)
 
@@ -44,11 +45,24 @@ class MatchConfig:
     thresholds: Thresholds = field(default_factory=Thresholds)
     fuzzy_threshold: float = 0.80
     probabilistic_threshold: float = 0.75
+    # --- matching-improvements spec, Phase 1 ---
+    use_phone: bool = True
+    default_phone_region: str = "US"
+    use_phonetic_blocking: bool = True
+    splink_tf_adjustments: bool = True
+    deterministic_corroboration: bool = True
+    deterministic_name_floor: float = 0.30
+    deterministic_demoted_score: float = 0.80
+    # stage name -> (match_override, review_override); None inherits the global.
+    stage_thresholds: dict[str, tuple[float | None, float | None]] | None = None
+    registration_id_type_a: str = "unknown"
+    registration_id_type_b: str = "unknown"
 
 
 @dataclass
 class MatchResult:
     pairs: pd.DataFrame                 # classified best-per-A match/review pairs
+    raw_pairs: pd.DataFrame            # ALL stage-emitted pairs pre-classification
     unique_a_idx: list[int]            # A rows with no counterpart
     unique_b_idx: list[int]            # B rows with no counterpart
     norm_a: pd.DataFrame               # normalized frame A (for result rendering)
@@ -81,20 +95,32 @@ def run_pipeline(
     progress = progress or _noop
 
     progress("Normalizing records", 0.05)
-    norm_a = normalize_frame(raw_a, mapping_a)
-    norm_b = normalize_frame(raw_b, mapping_b)
+    norm_a = normalize_frame(raw_a, mapping_a, phone_region=config.default_phone_region)
+    norm_b = normalize_frame(raw_b, mapping_b, phone_region=config.default_phone_region)
 
     all_pairs: list[pd.DataFrame] = []
     resolved_a: set[int] = set()  # A indices confidently matched, excluded downstream
     resolved_b: set[int] = set()
 
     if config.use_deterministic:
-        progress("Deterministic matching (IDs, domains)", 0.2)
-        det = deterministic.match_deterministic(norm_a, norm_b)
+        progress("Deterministic matching (IDs, domains, phones)", 0.2)
+        det = deterministic.match_deterministic(
+            norm_a,
+            norm_b,
+            use_phone=config.use_phone,
+            corroboration=config.deterministic_corroboration,
+            name_floor=config.deterministic_name_floor,
+            demoted_score=config.deterministic_demoted_score,
+            id_type_a=config.registration_id_type_a,
+            id_type_b=config.registration_id_type_b,
+        )
         if not det.empty:
             all_pairs.append(det)
-            resolved_a |= set(det["idx_a"].tolist())
-            resolved_b |= set(det["idx_b"].tolist())
+            # Only confident deterministic hits leave the pool; corroboration-demoted
+            # pairs (review band) stay in play for later stages.
+            strong = det.loc[det["score"] >= config.thresholds.match]
+            resolved_a |= set(strong["idx_a"].tolist())
+            resolved_b |= set(strong["idx_b"].tolist())
 
     if config.use_probabilistic:
         progress("Probabilistic linkage (Splink)", 0.45)
@@ -103,7 +129,12 @@ def run_pipeline(
         sub_b = norm_b.loc[~norm_b.index.isin(resolved_b)]
         if not sub_a.empty and not sub_b.empty:
             prob = probabilistic.match_probabilistic(
-                sub_a, sub_b, threshold=config.probabilistic_threshold
+                sub_a,
+                sub_b,
+                threshold=config.probabilistic_threshold,
+                use_phone=config.use_phone,
+                phonetic_blocking=config.use_phonetic_blocking,
+                tf_adjustments=config.splink_tf_adjustments,
             )
             if not prob.empty:
                 all_pairs.append(prob)
@@ -121,17 +152,20 @@ def run_pipeline(
             threshold=config.fuzzy_threshold,
             exclude_a=resolved_a,
             exclude_b=resolved_b,
+            phonetic=config.use_phonetic_blocking,
         )
         if not fz.empty:
             all_pairs.append(fz)
 
     progress("Scoring and classifying", 0.9)
     combined = (
-        pd.concat(all_pairs, ignore_index=True)
+        pd.concat([_with_pair_cols(p) for p in all_pairs], ignore_index=True)
         if all_pairs
-        else pd.DataFrame(columns=["idx_a", "idx_b", "score", "stage", "rule"])
+        else pd.DataFrame(columns=PAIR_COLS)
     )
-    classified = combine_and_classify(combined, config.thresholds)
+    classified = combine_and_classify(
+        combined, config.thresholds, stage_thresholds=config.stage_thresholds
+    )
 
     # Unique records: rows from each file that ended up in no match/review pair. These
     # make the categories reconcile — for each file, matched + review + unique == rows.
@@ -156,6 +190,7 @@ def run_pipeline(
     progress("Done", 1.0)
     return MatchResult(
         pairs=classified,
+        raw_pairs=combined,
         unique_a_idx=unique_a_idx,
         unique_b_idx=unique_b_idx,
         norm_a=norm_a,
@@ -164,16 +199,24 @@ def run_pipeline(
     )
 
 
+def _with_pair_cols(pairs: pd.DataFrame) -> pd.DataFrame:
+    """Ensure every stage's output carries the full pair schema (adds adjustments="")."""
+    out = pairs.copy()
+    if "adjustments" not in out.columns:
+        out["adjustments"] = ""
+    return out[PAIR_COLS]
+
+
 def _unique_frame(unique_a_idx: list[int], unique_b_idx: list[int]) -> pd.DataFrame:
     """Build single-sided rows for unmatched records (sentinel -1 on the empty side)."""
     rows = [
         {"idx_a": i, "idx_b": -1, "score": 0.0, "stage": "", "rule": "",
-         "match_class": UNIQUE_A}
+         "adjustments": "", "match_class": UNIQUE_A}
         for i in unique_a_idx
     ] + [
         {"idx_a": -1, "idx_b": i, "score": 0.0, "stage": "", "rule": "",
-         "match_class": UNIQUE_B}
+         "adjustments": "", "match_class": UNIQUE_B}
         for i in unique_b_idx
     ]
-    cols = ["idx_a", "idx_b", "score", "stage", "rule", "match_class"]
+    cols = [*PAIR_COLS, "match_class"]
     return pd.DataFrame(rows, columns=cols)

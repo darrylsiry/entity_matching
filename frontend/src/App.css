@@ -94,7 +94,10 @@
   background: var(--panel-2);
   color: var(--text);
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    opacity 0.15s;
   text-decoration: none;
   display: inline-flex;
   align-items: center;
@@ -184,7 +187,9 @@
   border-radius: 14px;
   padding: 22px;
   cursor: pointer;
-  transition: border-color 0.15s, transform 0.1s;
+  transition:
+    border-color 0.15s,
+    transform 0.1s;
 }
 .mode-card:hover {
   border-color: var(--muted);
@@ -708,6 +713,113 @@ select {
 }
 .tab.active .tab-count {
   color: var(--text);
+}
+
+/* resume-last-session banner */
+.resume-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  margin-bottom: 18px;
+  border: 1px solid var(--primary);
+  border-radius: 10px;
+  background: rgba(99, 102, 241, 0.08);
+}
+
+/* registration-id type select (column mapping) */
+.id-type-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+.id-type-row select {
+  width: auto;
+  min-width: 160px;
+}
+
+/* per-stage timings under the run progress */
+.timings {
+  margin-top: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+}
+.timing strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* bulk review bar */
+.bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: -6px 0 14px;
+}
+
+/* transient success notice */
+.notice {
+  color: var(--match);
+  background: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  padding: 8px 12px;
+  border-radius: 8px;
+  margin-top: 12px;
+  margin-bottom: 12px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+/* corroboration provenance chips */
+.adj-chip {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 999px;
+  letter-spacing: 0.02em;
+}
+.adj-chip.good {
+  background: rgba(34, 197, 94, 0.12);
+  color: var(--match);
+}
+.adj-chip.bad {
+  background: rgba(239, 68, 68, 0.12);
+  color: #f87171;
+}
+
+/* keyboard-focused pair card */
+.pair-card.focused {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+kbd {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 5px;
+  font-size: 12px;
+  font-family: inherit;
+}
+
+.eval-suggest {
+  margin-top: 6px;
+  font-size: 11px;
+  padding: 3px 8px;
+  color: var(--primary);
+}
+.error-inline {
+  color: var(--danger);
+  font-size: 13px;
+  margin-left: 10px;
+}
+.thresholds-panel {
+  margin: 0 0 18px;
+}
+.thresholds-panel .slider-row {
+  max-width: 520px;
 }
 .score {
   font-weight: 700;

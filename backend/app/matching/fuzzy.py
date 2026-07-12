@@ -4,11 +4,11 @@ For records not resolved deterministically and (optionally) not covered by the
 probabilistic stage, do a blocked fuzzy name comparison with rapidfuzz.
 
 Blocking: each record contributes one key per name token — the token's first
-`_PREFIX_LEN` characters. Two records are compared if they share **any** block key.
-This keeps comparisons tractable (no A x B) while tolerating both word-order
-differences ("Acme Global" / "Global Acme") and typos after the prefix
-("Umbrella" / "Umbrela" both -> "umbr"). Within a candidate set we score name
-similarity with token_set_ratio, boosted when city/postcode also agree.
+`_PREFIX_LEN` characters, plus (when enabled) the token's metaphone code so typos in
+the first characters still block together ("Jonson"/"Johnson" -> JNSN). Two records
+are compared if they share **any** block key. Within a candidate set we score name
+similarity with a length-aware metric, adjusted by corroborating/conflicting
+secondary fields — and we record *which* adjustments applied (provenance).
 """
 
 from __future__ import annotations
@@ -16,12 +16,15 @@ from __future__ import annotations
 import pandas as pd
 from rapidfuzz import fuzz
 
+from .normalize import name_metaphone
 from .schema import CanonicalField, norm_col
 
 _NAME = norm_col(CanonicalField.NAME)
 _ADDRESS = norm_col(CanonicalField.ADDRESS)
 _CITY = norm_col(CanonicalField.CITY)
+_STATE = norm_col(CanonicalField.STATE)
 _POSTCODE = norm_col(CanonicalField.POSTCODE)
+_COUNTRY = norm_col(CanonicalField.COUNTRY)
 
 _PREFIX_LEN = 4  # chars of each token used as a blocking key
 
@@ -34,37 +37,62 @@ _ADDR_AGREE = 0.05
 _ADDR_CONFLICT = -0.18
 _FIELD_AGREE = 0.03
 
+# Agreement-only secondary fields: (column, availability key, provenance label).
+_AGREE_FIELDS = (
+    (_CITY, "city", "same_city"),
+    (_POSTCODE, "pc", "same_postcode"),
+    (_STATE, "state", "same_state"),
+    (_COUNTRY, "country", "same_country"),
+)
+
 
 def _empty_pairs() -> pd.DataFrame:
-    return pd.DataFrame(columns=["idx_a", "idx_b", "score", "stage", "rule"])
+    return pd.DataFrame(
+        columns=["idx_a", "idx_b", "score", "stage", "rule", "adjustments"]
+    )
 
 
-def _block_keys(name: str) -> list[str]:
-    """One key per token: its first _PREFIX_LEN chars."""
-    return [tok[:_PREFIX_LEN] for tok in name.split() if tok]
+def _block_keys(name: str, phonetic: bool = True) -> list[str]:
+    """Blocking keys for a name: 4-char prefixes plus (optionally) metaphone codes.
+
+    Metaphone keys are prefixed "m:" so they can never collide with prefix keys.
+    """
+    keys = [tok[:_PREFIX_LEN] for tok in name.split() if tok]
+    if phonetic:
+        codes = name_metaphone(name)
+        keys.extend(f"m:{c}" for c in codes.split() if c)
+    return keys
 
 
-def corroborate(name_score: float, row_a, row_b, has: dict) -> float:
+def corroborate(
+    name_score: float, row_a, row_b, has: dict
+) -> tuple[float, list[str]]:
     """Adjust a name-similarity score using secondary fields.
 
-    Agreement (matching city/postcode, similar address) nudges it up; a clearly
-    different address pulls it down so a coincidental name match is surfaced for
-    review instead of auto-accepted. Missing fields never penalize. Clamped to [0, 1].
+    Agreement (matching city/postcode/state/country, similar address) nudges it up; a
+    clearly different address pulls it down so a coincidental name match is surfaced
+    for review instead of auto-accepted. Missing fields never penalize.
+
+    Returns (clamped score, list of applied adjustment labels) — the labels are the
+    pair's provenance, shown to reviewers so they can see *why* the score moved.
     """
     delta = 0.0
+    applied: list[str] = []
     if has.get("addr"):
         av, bv = row_a[_ADDRESS], row_b[_ADDRESS]
         if av and bv:
             s = fuzz.token_set_ratio(av, bv) / 100.0
             if s >= 0.70:
                 delta += _ADDR_AGREE
+                applied.append("addr_agree")
             elif s < 0.45:
                 delta += _ADDR_CONFLICT
-    if has.get("city") and row_a[_CITY] and row_a[_CITY] == row_b[_CITY]:
-        delta += _FIELD_AGREE
-    if has.get("pc") and row_a[_POSTCODE] and row_a[_POSTCODE] == row_b[_POSTCODE]:
-        delta += _FIELD_AGREE
-    return max(0.0, min(1.0, name_score + delta))
+                applied.append("addr_conflict")
+    for col, avail_key, label in _AGREE_FIELDS:
+        if has.get(avail_key) and row_a[col] and row_a[col] == row_b[col]:
+            delta += _FIELD_AGREE
+            applied.append(label)
+    return max(0.0, min(1.0, name_score + delta)), applied
 
 
 def _availability(a: pd.DataFrame, b: pd.DataFrame) -> dict:
@@ -72,6 +100,8 @@ def _availability(a: pd.DataFrame, b: pd.DataFrame) -> dict:
         "addr": _ADDRESS in a and _ADDRESS in b,
         "city": _CITY in a and _CITY in b,
         "pc": _POSTCODE in a and _POSTCODE in b,
+        "state": _STATE in a and _STATE in b,
+        "country": _COUNTRY in a and _COUNTRY in b,
     }
 
 
@@ -93,10 +123,11 @@ def match_fuzzy(
     threshold: float = 0.80,
     exclude_a: set[int] | None = None,
     exclude_b: set[int] | None = None,
+    phonetic: bool = True,
 ) -> pd.DataFrame:
     """Blocked fuzzy name matching.
 
-    `threshold` is the minimum name similarity (0-1) to emit a pair. `exclude_a` /
+    `threshold` is the minimum adjusted score (0-1) to emit a pair. `exclude_a` /
     `exclude_b` are positional indices already resolved by earlier stages and skipped.
     For each A record only its single best B match above threshold is kept.
     """
@@ -112,7 +143,7 @@ def match_fuzzy(
     # of B records sharing any of its keys.
     b_blocks: dict[str, list[int]] = {}
     for idx, name in b_use[_NAME].items():
-        for key in _block_keys(name):
+        for key in _block_keys(name, phonetic):
             b_blocks.setdefault(key, []).append(idx)
 
     has = _availability(a_use, b_use)
@@ -121,14 +152,18 @@ def match_fuzzy(
     for idx_a, row_a in a_use.iterrows():
         name_a = row_a[_NAME]
         candidates = {
-            idx_b for key in _block_keys(name_a) for idx_b in b_blocks.get(key, ())
+            idx_b
+            for key in _block_keys(name_a, phonetic)
+            for idx_b in b_blocks.get(key, ())
         }
-        best_idx, best_score = None, 0.0
+        best_idx, best_score, best_adj = None, 0.0, []
         for idx_b in candidates:
             row_b = b_use.loc[idx_b]
-            score = corroborate(name_similarity(name_a, row_b[_NAME]), row_a, row_b, has)
+            score, adj = corroborate(
+                name_similarity(name_a, row_b[_NAME]), row_a, row_b, has
+            )
             if score > best_score:
-                best_idx, best_score = idx_b, score
+                best_idx, best_score, best_adj = idx_b, score, adj
         if best_idx is not None and best_score >= threshold:
             rows.append(
                 {
@@ -137,6 +172,7 @@ def match_fuzzy(
                     "score": round(best_score, 4),
                     "stage": "fuzzy",
                     "rule": "name_token_set",
+                    "adjustments": ",".join(best_adj),
                 }
             )
 
@@ -149,10 +185,11 @@ def match_fuzzy_within(
     a: pd.DataFrame,
     threshold: float = 0.80,
     exclude: set[int] | None = None,
+    phonetic: bool = True,
 ) -> pd.DataFrame:
     """Blocked fuzzy name matching among rows of a single frame (for dedupe).
 
-    Emits every i<j pair whose name similarity is >= threshold (not just best-per-row),
+    Emits every i<j pair whose adjusted score is >= threshold (not just best-per-row),
     so multi-row duplicate clusters are fully linked. `exclude` skips rows already
     resolved deterministically.
     """
@@ -163,7 +200,7 @@ def match_fuzzy_within(
 
     blocks: dict[str, list[int]] = {}
     for idx, name in use[_NAME].items():
-        for key in _block_keys(name):
+        for key in _block_keys(name, phonetic):
             blocks.setdefault(key, []).append(idx)
 
     has = _availability(use, use)
@@ -173,7 +210,10 @@ def match_fuzzy_within(
     for idx_i, row_i in use.iterrows():
         name_i = row_i[_NAME]
         candidates = {
-            j for key in _block_keys(name_i) for j in blocks.get(key, ()) if j != idx_i
+            j
+            for key in _block_keys(name_i, phonetic)
+            for j in blocks.get(key, ())
+            if j != idx_i
         }
         for idx_j in candidates:
             lo, hi = (idx_i, idx_j) if idx_i < idx_j else (idx_j, idx_i)
@@ -181,11 +221,19 @@ def match_fuzzy_within(
                 continue
             seen.add((lo, hi))
             row_j = use.loc[idx_j]
-            score = corroborate(name_similarity(name_i, row_j[_NAME]), row_i, row_j, has)
+            score, adj = corroborate(
+                name_similarity(name_i, row_j[_NAME]), row_i, row_j, has
+            )
             if score >= threshold:
                 rows.append(
-                    {"idx_a": lo, "idx_b": hi, "score": round(score, 4),
-                     "stage": "fuzzy", "rule": "name_token_set"}
+                    {
+                        "idx_a": lo,
+                        "idx_b": hi,
+                        "score": round(score, 4),
+                        "stage": "fuzzy",
+                        "rule": "name_token_set",
+                        "adjustments": ",".join(adj),
+                    }
                 )
 
     if not rows:

@@ -43,7 +43,11 @@ export function DedupeResultsStep({ sessionId, onReset }: Props) {
       setError(null)
       try {
         if (tab === 'possible') {
-          const r = await getCandidates(sessionId, { filter: candFilter, page: p, pageSize: PAGE_SIZE })
+          const r = await getCandidates(sessionId, {
+            filter: candFilter,
+            page: p,
+            pageSize: PAGE_SIZE,
+          })
           setCandidates(r.candidates)
           setTotal(r.total)
           setCounts(r.counts)
@@ -88,19 +92,19 @@ export function DedupeResultsStep({ sessionId, onReset }: Props) {
       </div>
 
       <p className="muted small">
-        Every row was assigned a <strong>master ID</strong>; rows sharing an ID are the
-        same company. Only confident duplicates are merged automatically — borderline
-        pairs go to <strong>Possible duplicates</strong> for you to confirm or dismiss.
-        The CSV is your original file with <code>master_id</code> and{' '}
-        <code>cluster_size</code> columns added (reflecting your decisions).
+        Every row was assigned a <strong>master ID</strong>; rows sharing an ID are the same
+        company. Only confident duplicates are merged automatically — borderline pairs go to{' '}
+        <strong>Possible duplicates</strong> for you to confirm or dismiss. The CSV is your original
+        file with <code>master_id</code> and <code>cluster_size</code> columns added (reflecting
+        your decisions).
       </p>
 
       {(counts.possible_duplicates ?? 0) > 0 && !onPossible && (
         <p className="muted small review-hint">
           {counts.possible_duplicates} possible duplicate
           {counts.possible_duplicates === 1 ? '' : 's'} to review — open the{' '}
-          <strong>Possible duplicates</strong> tab. Confirming one merges the rows into a
-          single master ID.
+          <strong>Possible duplicates</strong> tab. Confirming one merges the rows into a single
+          master ID.
         </p>
       )}
 
@@ -148,16 +152,10 @@ export function DedupeResultsStep({ sessionId, onReset }: Props) {
 
       {onPossible ? (
         <>
-          {candidates.length === 0 && (
-            <p className="muted">No possible duplicates in this view.</p>
-          )}
+          {candidates.length === 0 && <p className="muted">No possible duplicates in this view.</p>}
           <div className="pair-list">
             {candidates.map((cand) => (
-              <CandidateCard
-                key={`${cand.idx_a}-${cand.idx_b}`}
-                cand={cand}
-                onDecide={decide}
-              />
+              <CandidateCard key={`${cand.idx_a}-${cand.idx_b}`} cand={cand} onDecide={decide} />
             ))}
           </div>
         </>
@@ -174,7 +172,11 @@ export function DedupeResultsStep({ sessionId, onReset }: Props) {
 
       {totalPages > 1 && (
         <div className="pager">
-          <button className="btn btn-ghost" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>
+          <button
+            className="btn btn-ghost"
+            disabled={page === 0}
+            onClick={() => setPage((p) => p - 1)}
+          >
             ← Prev
           </button>
           <span className="muted">
@@ -220,10 +222,16 @@ function CandidateCard({
         <span className="pair-actions">
           {!decided && (
             <>
-              <button className="btn btn-sm btn-confirm" onClick={() => onDecide(cand, 'confirmed')}>
+              <button
+                className="btn btn-sm btn-confirm"
+                onClick={() => onDecide(cand, 'confirmed')}
+              >
                 ✓ Same company
               </button>
-              <button className="btn btn-sm btn-dismiss" onClick={() => onDecide(cand, 'dismissed')}>
+              <button
+                className="btn btn-sm btn-dismiss"
+                onClick={() => onDecide(cand, 'dismissed')}
+              >
                 ✕ Not a match
               </button>
             </>

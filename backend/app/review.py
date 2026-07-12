@@ -21,7 +21,18 @@ from .matching.scoring import MATCH, REVIEW, UNIQUE_A, UNIQUE_B
 CONFIRMED = "confirmed"
 DISMISSED = "dismissed"
 _PAIR_CLASSES = [MATCH, REVIEW]
-_COLS = ["idx_a", "idx_b", "score", "stage", "rule", "match_class", "decision"]
+_COLS = [
+    "idx_a", "idx_b", "score", "stage", "rule", "adjustments",
+    "match_class", "decision",
+]
+
+
+def _ensure_cols(frame: pd.DataFrame) -> pd.DataFrame:
+    """Backfill columns older stored results may lack (e.g. adjustments)."""
+    if "adjustments" not in frame.columns:
+        frame = frame.copy()
+        frame["adjustments"] = ""
+    return frame
 
 
 def pair_key(idx_a: int, idx_b: int) -> str:
@@ -73,7 +84,7 @@ def effective_frame(session_id: str) -> pd.DataFrame:
     - dismissed review -> dropped; its records fall back into unique_a / unique_b
     - pending review    -> review
     """
-    base = storage.load_result(session_id)
+    base = _ensure_cols(storage.load_result(session_id))
     if base.empty:
         return pd.DataFrame(columns=_COLS)
     decisions = get_decisions(session_id)
@@ -113,14 +124,14 @@ def effective_frame(session_id: str) -> pd.DataFrame:
 
 def dismissed_frame(session_id: str) -> pd.DataFrame:
     """Review pairs the user dismissed — an audit/undo view (not part of counts)."""
-    base = storage.load_result(session_id)
+    base = _ensure_cols(storage.load_result(session_id))
     decisions = get_decisions(session_id)
     review = base[base["match_class"] == REVIEW].copy()
     if review.empty:
         return pd.DataFrame(columns=_COLS)
     mask = [
         decisions.get(pair_key(a, b)) == DISMISSED
-        for a, b in zip(review["idx_a"], review["idx_b"])
+        for a, b in zip(review["idx_a"], review["idx_b"], strict=False)
     ]
     out = review[mask].copy()
     out["match_class"] = DISMISSED

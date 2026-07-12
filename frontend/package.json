@@ -7,18 +7,25 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "gen:api": "openapi-typescript ../backend/openapi.json -o src/api-schema.d.ts",
+    "format": "prettier --write src",
+    "format:check": "prettier --check src",
+    "e2e": "playwright test"
   },
   "dependencies": {
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@types/node": "^24.13.2",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
+    "openapi-typescript": "^7.13.0",
     "oxlint": "^1.71.0",
+    "prettier": "^3.9.4",
     "typescript": "~6.0.2",
     "vite": "^8.1.1"
   }

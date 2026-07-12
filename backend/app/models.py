@@ -33,6 +33,18 @@ class ThresholdConfig(BaseModel):
     review: float = 0.75
 
 
+class StageThresholdOverride(BaseModel):
+    """Optional per-stage overrides; None inherits the global threshold."""
+
+    match: float | None = None
+    review: float | None = None
+
+
+RegistrationIdType = Literal[
+    "unknown", "duns", "ein", "vat", "company_number", "lei", "other"
+]
+
+
 class SessionConfig(BaseModel):
     use_deterministic: bool = True
     use_probabilistic: bool = True
@@ -40,6 +52,16 @@ class SessionConfig(BaseModel):
     thresholds: ThresholdConfig = Field(default_factory=ThresholdConfig)
     fuzzy_threshold: float = 0.80
     probabilistic_threshold: float = 0.75
+    # --- matching-improvements spec, Phase 1 ---
+    use_phone: bool = True              # only takes effect if a phone column is mapped
+    default_phone_region: str = "US"    # region hint for numbers without country code
+    use_phonetic_blocking: bool = True  # metaphone blocking keys (recall only)
+    splink_tf_adjustments: bool = True  # term-frequency adjustments on name/city
+    deterministic_corroboration: bool = True   # guard domain/phone 0.99s by name sanity
+    deterministic_name_floor: float = 0.30
+    deterministic_demoted_score: float = 0.80
+    # Per-stage classification overrides, e.g. {"fuzzy": {"match": 0.92}}. Null inherits.
+    stage_thresholds: dict[str, StageThresholdOverride] | None = None
 
 
 class CreateSessionRequest(BaseModel):
@@ -50,6 +72,10 @@ class CreateSessionRequest(BaseModel):
     # Only used in "link" mode. In "dedupe" mode file A is the single input.
     file_id_b: str | None = None
     mapping_b: dict[CanonicalField, str] = Field(default_factory=dict)
+    # Optional registration-id type per file; ids only join when types are equal or
+    # at least one side is "unknown" (spec 1.7).
+    registration_id_type_a: RegistrationIdType = "unknown"
+    registration_id_type_b: RegistrationIdType = "unknown"
     config: SessionConfig = Field(default_factory=SessionConfig)
 
 
@@ -72,11 +98,14 @@ class MatchPair(BaseModel):
     score: float
     stage: str
     rule: str
+    # Comma-joined corroboration signals applied to the score, e.g.
+    # "same_postcode,addr_agree" — the pair's provenance for reviewers.
+    adjustments: str = ""
     match_class: str
     # None = automatic; "confirmed"/"dismissed" = a user decision on a review pair.
     decision: str | None = None
-    record_a: dict
-    record_b: dict
+    record_a: dict[str, str]
+    record_b: dict[str, str]
 
 
 class DecisionRequest(BaseModel):
@@ -86,17 +115,40 @@ class DecisionRequest(BaseModel):
     decision: Literal["confirmed", "dismissed", "pending"]
 
 
+class BulkDecisionRequest(BaseModel):
+    """Apply one decision to many pairs at once (bulk review)."""
+
+    pairs: list[DecisionRequest] = Field(max_length=5000)
+
+
 class DecisionResponse(BaseModel):
     session_id: str
     counts: dict
 
 
+class ReclassifyRequest(BaseModel):
+    """New global thresholds; Stage 4 re-runs on stored scores without re-matching."""
+
+    match: float = Field(ge=0.0, le=1.0)
+    review: float = Field(ge=0.0, le=1.0)
+
+
+class ReclassifyResponse(BaseModel):
+    session_id: str
+    match: int
+    review: int
+    # Lowest score any stage emitted at run time — thresholds below this need a re-run.
+    min_stored_score: float | None = None
+    counts: dict
+
+
 class EvaluationResponse(BaseModel):
-    """Debug-only accuracy vs a ground-truth file."""
+    """Accuracy vs a ground-truth file (uploaded per session, or the repo fallback)."""
 
     available: bool
     applicable: bool = False
     reason: str | None = None
+    gt_source: str = "none"       # uploaded | repo | none
     precision: float = 0.0
     recall: float = 0.0
     f1: float = 0.0
@@ -105,6 +157,11 @@ class EvaluationResponse(BaseModel):
     fn: int = 0
     ground_truth_total: int = 0
     predicted_total: int = 0
+    # Best-F1 point from sweeping the match threshold over stored pair scores.
+    suggested_match_threshold: float | None = None
+    suggested_precision: float | None = None
+    suggested_recall: float | None = None
+    suggested_f1: float | None = None
 
 
 class ResultsResponse(BaseModel):
@@ -120,7 +177,7 @@ class ResultsResponse(BaseModel):
 
 class ClusterMember(BaseModel):
     row_idx: int
-    record: dict
+    record: dict[str, str]
 
 
 class ClusterOut(BaseModel):
@@ -143,9 +200,10 @@ class DedupeCandidate(BaseModel):
     idx_b: int
     score: float
     stage: str
+    adjustments: str = ""         # corroboration provenance (same as MatchPair)
     decision: str | None = None   # None = pending; "confirmed" merges; "dismissed" keeps apart
-    record_a: dict
-    record_b: dict
+    record_a: dict[str, str]
+    record_b: dict[str, str]
 
 
 class CandidatesResponse(BaseModel):

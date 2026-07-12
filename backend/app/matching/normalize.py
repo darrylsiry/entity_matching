@@ -10,15 +10,19 @@ DataFrame.
 
 from __future__ import annotations
 
+import functools
 import re
 
 import pandas as pd
+import pycountry
 import tldextract
 from cleanco import basename
 from unidecode import unidecode
 
 from .schema import (
     NORM_DOMAIN,
+    NORM_FIRST_METAPHONE,
+    NORM_NAME_METAPHONE,
     NORM_NAME_TOKENS,
     CanonicalField,
     norm_col,
@@ -31,6 +35,16 @@ _TLD = tldextract.TLDExtract(suffix_list_urls=())
 _PUNCT_RE = re.compile(r"[^\w\s]", flags=re.UNICODE)
 _WS_RE = re.compile(r"\s+")
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]")
+
+# Company-name abbreviation expansion (applied token-wise after legal-suffix stripping)
+# so "Acme Intl Grp" and "Acme International Group" normalize identically. Extendable.
+_ABBREVIATIONS = {
+    "intl": "international", "natl": "national", "mfg": "manufacturing",
+    "svcs": "services", "svc": "service", "grp": "group", "hldgs": "holdings",
+    "bros": "brothers", "assoc": "associates", "dept": "department",
+    "dev": "development", "tech": "technology", "sys": "systems",
+    "sols": "solutions",
+}
 
 
 def _base(value: object) -> str:
@@ -46,16 +60,25 @@ def _base(value: object) -> str:
 def normalize_name(value: object) -> str:
     """Company name -> comparable token string.
 
-    Strips legal suffixes (Inc, LLC, Ltd, GmbH, ...) via cleanco, removes
+    Strips legal suffixes (Inc, LLC, Ltd, GmbH, ...) via cleanco, expands common
+    abbreviations (Intl -> international, & -> and), drops a leading "the", removes
     punctuation, and collapses whitespace.
     """
     text = _base(value)
     if not text:
         return ""
+    # Map & / + to "and" before punctuation is stripped away.
+    text = text.replace("&", " and ").replace("+", " and ")
     # cleanco.basename strips corporate suffixes; feed it the pre-lowercased text.
     stripped = basename(text) or text
     stripped = _PUNCT_RE.sub(" ", stripped)
-    return _WS_RE.sub(" ", stripped).strip()
+    stripped = _WS_RE.sub(" ", stripped).strip()
+
+    tokens = stripped.split()
+    if tokens and tokens[0] == "the":
+        tokens = tokens[1:]
+    tokens = [_ABBREVIATIONS.get(t, t) for t in tokens]
+    return " ".join(tokens)
 
 
 def name_tokens(normalized_name: str) -> str:
@@ -127,12 +150,90 @@ def normalize_id(value: object) -> str:
 
 
 def normalize_generic(value: object) -> str:
-    """Address/city/state/country: punctuation-stripped, collapsed whitespace."""
+    """Address/city: punctuation-stripped, collapsed whitespace."""
     text = _base(value)
     if not text:
         return ""
     text = _PUNCT_RE.sub(" ", text)
     return _WS_RE.sub(" ", text).strip()
+
+
+@functools.lru_cache(maxsize=4096)
+def _country_iso2(cleaned: str) -> str:
+    """Resolve a cleaned country string to ISO 3166-1 alpha-2 (lowercase), or "".
+
+    Tries the string as-is and de-spaced (so "u s a" from "U.S.A." resolves via the
+    alpha-3 "usa"). Cached — a file usually has only a handful of country values.
+    """
+    if not cleaned:
+        return ""
+    for candidate in (cleaned, cleaned.replace(" ", "")):
+        try:
+            return pycountry.countries.lookup(candidate).alpha_2.lower()
+        except LookupError:
+            continue
+    try:  # fuzzy is slower and can be noisy; only as a last resort
+        return pycountry.countries.search_fuzzy(cleaned)[0].alpha_2.lower()
+    except Exception:  # noqa: BLE001 - never let this raise
+        return ""
+
+
+def normalize_country(value: object) -> str:
+    """Resolve a country to ISO 3166-1 alpha-2 (e.g. "USA"/"United States" -> "us").
+
+    Unresolvable input is passed through cleaned (never drop signal).
+    """
+    text = _base(value)
+    if not text:
+        return ""
+    cleaned = _WS_RE.sub(" ", re.sub(r"[^a-z ]", " ", text)).strip()
+    iso = _country_iso2(cleaned)
+    return iso or _WS_RE.sub(" ", _PUNCT_RE.sub(" ", text)).strip()
+
+
+# US states + DC + territories and Canadian provinces, mapped both full-name and
+# abbreviation -> lowercase postal code. (Extend to other countries later.)
+def _build_region_map() -> dict[str, str]:
+    us = {
+        "alabama": "al", "alaska": "ak", "arizona": "az", "arkansas": "ar",
+        "california": "ca", "colorado": "co", "connecticut": "ct", "delaware": "de",
+        "florida": "fl", "georgia": "ga", "hawaii": "hi", "idaho": "id",
+        "illinois": "il", "indiana": "in", "iowa": "ia", "kansas": "ks",
+        "kentucky": "ky", "louisiana": "la", "maine": "me", "maryland": "md",
+        "massachusetts": "ma", "michigan": "mi", "minnesota": "mn", "mississippi": "ms",
+        "missouri": "mo", "montana": "mt", "nebraska": "ne", "nevada": "nv",
+        "new hampshire": "nh", "new jersey": "nj", "new mexico": "nm", "new york": "ny",
+        "north carolina": "nc", "north dakota": "nd", "ohio": "oh", "oklahoma": "ok",
+        "oregon": "or", "pennsylvania": "pa", "rhode island": "ri",
+        "south carolina": "sc", "south dakota": "sd", "tennessee": "tn", "texas": "tx",
+        "utah": "ut", "vermont": "vt", "virginia": "va", "washington": "wa",
+        "west virginia": "wv", "wisconsin": "wi", "wyoming": "wy",
+        "district of columbia": "dc", "puerto rico": "pr", "guam": "gu",
+    }
+    ca = {
+        "alberta": "ab", "british columbia": "bc", "manitoba": "mb",
+        "new brunswick": "nb", "newfoundland and labrador": "nl",
+        "nova scotia": "ns", "ontario": "on", "prince edward island": "pe",
+        "quebec": "qc", "saskatchewan": "sk", "northwest territories": "nt",
+        "nunavut": "nu", "yukon": "yt",
+    }
+    region = {}
+    for full, abbr in {**us, **ca}.items():
+        region[full] = abbr
+        region[abbr] = abbr
+    return region
+
+
+_REGION_MAP = _build_region_map()
+
+
+def normalize_state(value: object) -> str:
+    """Map a US state / Canadian province (full name or abbreviation) to its postal
+    code (lowercase). Unknown values pass through cleaned."""
+    cleaned = normalize_generic(value)
+    if not cleaned:
+        return ""
+    return _REGION_MAP.get(cleaned, cleaned)
 
 
 def normalize_postcode(value: object) -> str:
@@ -141,20 +242,69 @@ def normalize_postcode(value: object) -> str:
     return _NON_ALNUM_RE.sub("", text)
 
 
+# Phone numbers a company would never uniquely own (placeholders / fiction range).
+_PHONE_PLACEHOLDER_RE = re.compile(r"555\s*-?\s*555|123\s*-?\s*456\s*-?\s*7890")
+
+
+def normalize_phone(value: object, region: str = "US") -> str:
+    """Parse a phone number to E.164 ("+14155552671"). "" when invalid or placeholder.
+
+    `region` is the country hint for numbers written without a country code.
+    Guards (return ""): unparseable/invalid numbers, < 7 significant digits,
+    all-same-digit, and 555-555 / 123-456-7890 style placeholders.
+    """
+    text = _base(value)
+    if not text:
+        return ""
+    if _PHONE_PLACEHOLDER_RE.search(text):
+        return ""
+    digits = re.sub(r"\D", "", text)
+    if len(digits) < 7 or len(set(digits)) == 1:
+        return ""
+    try:
+        import phonenumbers
+
+        parsed = phonenumbers.parse(text, region.upper() or "US")
+        if not phonenumbers.is_valid_number(parsed):
+            return ""
+        return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
+    except Exception:  # unparseable input or phonenumbers missing -> no signal
+        return ""
+
+
+def name_metaphone(normalized_name: str) -> str:
+    """Per-token metaphone codes of a normalized name, space-joined ("" on failure).
+
+    "johnson controls" and "jonson controls" share the same codes, so phonetic
+    blocking survives typos that break the 4-char-prefix keys.
+    """
+    if not normalized_name:
+        return ""
+    try:
+        import jellyfish
+
+        codes = [jellyfish.metaphone(tok) for tok in normalized_name.split()]
+        return " ".join(c for c in codes if c)
+    except Exception:  # jellyfish missing/odd input -> feature degrades to off
+        return ""
+
+
 # Which normalizer to apply per canonical field.
 _FIELD_NORMALIZERS = {
     CanonicalField.NAME: normalize_name,
     CanonicalField.ADDRESS: normalize_generic,
     CanonicalField.CITY: normalize_generic,
-    CanonicalField.STATE: normalize_generic,
-    CanonicalField.COUNTRY: normalize_generic,
+    CanonicalField.STATE: normalize_state,
+    CanonicalField.COUNTRY: normalize_country,
     CanonicalField.POSTCODE: normalize_postcode,
     CanonicalField.REGISTRATION_ID: normalize_id,
 }
 
 
 def normalize_frame(
-    df: pd.DataFrame, mapping: dict[CanonicalField, str]
+    df: pd.DataFrame,
+    mapping: dict[CanonicalField, str],
+    phone_region: str = "US",
 ) -> pd.DataFrame:
     """Add `norm_*` columns to a copy of `df` based on the canonical->source mapping.
 
@@ -178,5 +328,21 @@ def normalize_frame(
     else:
         out[NORM_DOMAIN] = ""
 
-    out[NORM_NAME_TOKENS] = out[norm_col(CanonicalField.NAME)].map(name_tokens)
+    # Phone needs the region hint, so it can't sit in the plain normalizer map.
+    phone_src = mapping.get(CanonicalField.PHONE)
+    phone_target = norm_col(CanonicalField.PHONE)
+    if phone_src is not None and phone_src in out.columns:
+        out[phone_target] = out[phone_src].map(
+            lambda v: normalize_phone(v, phone_region)
+        )
+    else:
+        out[phone_target] = ""
+
+    name_norm = out[norm_col(CanonicalField.NAME)]
+    out[NORM_NAME_TOKENS] = name_norm.map(name_tokens)
+    metaphones = name_norm.map(name_metaphone)
+    out[NORM_NAME_METAPHONE] = metaphones
+    out[NORM_FIRST_METAPHONE] = metaphones.map(
+        lambda m: m.split(" ", 1)[0] if m else ""
+    )
     return out

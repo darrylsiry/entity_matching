@@ -25,11 +25,11 @@ stages consider.
 
 | Stage | Technique | Library | Signal |
 |-------|-----------|---------|--------|
-| 0 · Normalize | Strip legal suffixes (Inc/LLC/Ltd/GmbH), fold unicode, extract domains from URLs/emails, canonicalize IDs; **drop weak signals** (generic domains like gmail/linkedin, placeholder/short IDs) | `cleanco`, `tldextract`, `unidecode` | — |
-| 1 · Deterministic | Exact match on registration/tax ID, then website domain | pandas | Near-certain |
-| 2 · Probabilistic | Fellegi–Sunter linkage with **blocking** (empty values excluded) + field comparisons (Jaro-Winkler name, exact domain, Levenshtein address, exact postcode) | **Splink** (DuckDB) | Scored 0–1 |
-| 3 · Fuzzy fallback | Length-aware name similarity `min(token_sort, token_set)` + address corroboration / conflict penalty | `rapidfuzz` | Scored 0–1 |
-| 4 · Resolve | Split links by confidence (≥ Match auto, Review band → human). Two-file: **Match / Review / No-match**. One-file: confident links → **connected components → master ID**; review-band links → **possible duplicates** to confirm/dismiss | pandas | — |
+| 0 · Normalize | Strip legal suffixes, **expand abbreviations** (Intl→International), fold unicode, extract domains, canonicalize IDs/**phones (E.164)**/**countries (ISO)**/states, derive **metaphone** keys; drop weak signals (generic domains, placeholder IDs/phones) | `cleanco`, `tldextract`, `unidecode`, `pycountry`, `phonenumbers`, `jellyfish` | — |
+| 1 · Deterministic | Exact match on registration/tax ID (**type-guarded**), website domain, **phone** — domain/phone hits with conflicting names are **demoted to review**, not auto-accepted | pandas | Near-certain |
+| 2 · Probabilistic | Fellegi–Sunter linkage with **blocking** (name tokens, postcode, domain, phone, **phonetic**; empties excluded) + field comparisons with **term-frequency weighting** (rare names count for more) | **Splink** (DuckDB) | Scored 0–1 |
+| 3 · Fuzzy fallback | Length-aware name similarity `min(token_sort, token_set)` + corroboration (address/city/zip/state/country) with conflict penalty; **records which adjustments applied** | `rapidfuzz` | Scored 0–1 |
+| 4 · Resolve | Split links by confidence (≥ Match auto, Review band → human; optional **per-stage thresholds**). Two-file: **Match / Review / No-match**. One-file: confident links → **connected components → master ID**; review-band links → **possible duplicates** to confirm/dismiss | pandas | — |
 
 **Blocking** is what makes 100k×100k tractable: instead of 10¹⁰ comparisons, records are
 only compared when they share a signal (a name-token prefix, a postcode, a domain).
@@ -48,8 +48,19 @@ against `ground_truth_matches.csv` (200 true pairs):
 |---|---|---|---|---|
 | Auto-matches | **1.00** | 0.99 | **0.995** | **0** |
 
-When `ground_truth_matches.csv` is present and the uploaded data corresponds to it, the
-Results screen shows a live precision/recall box (developer aid; ignored otherwise).
+**Evaluation is a feature:** upload your own labeled sample of true matches
+(columns `file_a_name,file_b_name`) on the Results screen to see live precision /
+recall / F1 — and get a **suggested match threshold** (best F1 over your data),
+applicable with one click. Thresholds can be changed and results **re-classified
+instantly without re-running** the pipeline.
+
+### Reviewing efficiently
+
+The review queue supports **bulk actions** (confirm/dismiss all in view), **keyboard
+review** (<kbd>↑↓</kbd>/<kbd>j k</kbd> navigate, <kbd>y</kbd> confirm, <kbd>n</kbd>
+dismiss, <kbd>u</kbd> undo), and every pair shows **why it matched** — the stage/rule
+plus corroboration chips (`+zip`, `−addr`, …). Results survive a page refresh and are
+link-shareable (the session id lives in the URL).
 
 ## Project layout
 
@@ -122,11 +133,26 @@ docker build -t entity-matching .
 docker run -p 8080:8080 entity-matching   # -> http://localhost:8080
 ```
 
-## Tests
+## Tests & tooling
 
 ```bash
-cd backend && .venv/bin/pytest -q
+cd backend && .venv/bin/pytest -q          # unit tests
+cd backend && .venv/bin/ruff check app     # lint (config in backend/pyproject.toml)
+cd frontend && npm run format:check        # prettier
+cd frontend && npm run e2e                 # Playwright e2e (see playwright.config.ts)
+cd frontend && npm run gen:api             # regen TS types from the OpenAPI schema
 ```
+
+- **CI** (`.github/workflows/ci.yml`) runs lint + tests, the frontend build with a
+  prettier check, an **API-type drift check** (regenerates `backend/openapi.json` +
+  `frontend/src/api-schema.d.ts` and fails if they differ from what's committed), and
+  the Playwright e2e against the prod-mode server.
+- **Pre-commit** hooks (ruff, prettier): `pip install pre-commit && pre-commit install`.
+- Frontend API types are **generated from the backend's OpenAPI schema** — change a
+  Pydantic model, run `python backend/scripts/export_openapi.py backend/openapi.json`
+  then `npm run gen:api`, and TypeScript flags any mismatch.
+- Uploads are capped (100 MB / 500k rows) and CSV exports are sanitized against
+  spreadsheet formula injection.
 
 ## API
 
@@ -139,6 +165,9 @@ cd backend && .venv/bin/pytest -q
 | GET | `/api/session/{id}/status` | Poll `{state, stage, progress, counts}` |
 | GET | `/api/session/{id}/results` | *link mode:* paginated pairs (`?match_class=pairs\|match\|review\|dismissed\|unique_a\|unique_b`) |
 | POST | `/api/session/{id}/decision` | confirm/dismiss/undo — a review pair (link) or a possible-duplicate candidate (dedupe) |
+| POST | `/api/session/{id}/decisions/bulk` | apply one decision to many pairs at once |
+| POST | `/api/session/{id}/reclassify` | change thresholds and re-classify stored scores (no re-run) |
+| POST | `/api/session/{id}/ground_truth` | upload a labeled sample to score against (P/R/F1 + threshold suggestion) |
 | GET | `/api/session/{id}/clusters` | *dedupe mode:* master-ID clusters, reflecting confirmed merges (`?filter=&page=`) |
 | GET | `/api/session/{id}/candidates` | *dedupe mode:* possible-duplicate pairs to review (`?filter=pending\|confirmed\|dismissed`) |
 | GET | `/api/session/{id}/evaluation` | *debug:* precision/recall vs ground truth, when present |

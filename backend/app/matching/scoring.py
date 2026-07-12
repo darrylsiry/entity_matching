@@ -1,7 +1,8 @@
 """Stage 4 — combine and classify.
 
 Takes candidate pairs from every stage, resolves each A record to its single best B
-match, and classifies by score into match / review / no_match bands.
+match, and classifies by score into match / review / no_match bands. Classification
+can be overridden per stage (scores from different stages sit on different scales).
 """
 
 from __future__ import annotations
@@ -17,6 +18,13 @@ NO_MATCH = "no_match"
 # categories reconcile against each file's total row count.
 UNIQUE_A = "unique_a"
 UNIQUE_B = "unique_b"
+
+# Canonical schema for stage-emitted pairs. `adjustments` is a comma-joined list of
+# corroboration signals applied to the score (provenance for the review UI/CSV).
+PAIR_COLS = ["idx_a", "idx_b", "score", "stage", "rule", "adjustments"]
+
+# stage name -> (match_override | None, review_override | None)
+StageThresholds = dict[str, tuple[float | None, float | None]]
 
 
 @dataclass(frozen=True)
@@ -34,8 +42,31 @@ class Thresholds:
         return NO_MATCH
 
 
+def classify_pair(
+    score: float,
+    stage: str,
+    thresholds: Thresholds,
+    stage_thresholds: StageThresholds | None = None,
+) -> str:
+    """Classify one pair, honoring any per-stage threshold override (None inherits)."""
+    match_t, review_t = thresholds.match, thresholds.review
+    if stage_thresholds and stage in stage_thresholds:
+        m_over, r_over = stage_thresholds[stage]
+        if m_over is not None:
+            match_t = m_over
+        if r_over is not None:
+            review_t = r_over
+    if score >= match_t:
+        return MATCH
+    if score >= review_t:
+        return REVIEW
+    return NO_MATCH
+
+
 def combine_and_classify(
-    pairs: pd.DataFrame, thresholds: Thresholds
+    pairs: pd.DataFrame,
+    thresholds: Thresholds,
+    stage_thresholds: StageThresholds | None = None,
 ) -> pd.DataFrame:
     """Deduplicate to best-per-A-record and add a `match_class` column.
 
@@ -43,13 +74,19 @@ def combine_and_classify(
     wins (deterministic hits at 0.99 naturally dominate). Only pairs that reach at
     least the review band are returned.
     """
-    cols = ["idx_a", "idx_b", "score", "stage", "rule", "match_class"]
+    cols = [*PAIR_COLS, "match_class"]
     if pairs is None or pairs.empty:
         return pd.DataFrame(columns=cols)
 
-    ranked = pairs.sort_values("score", ascending=False)
+    ranked = pairs.copy()
+    if "adjustments" not in ranked.columns:
+        ranked["adjustments"] = ""
+    ranked = ranked.sort_values("score", ascending=False)
     best = ranked.drop_duplicates(subset=["idx_a"], keep="first").copy()
 
-    best["match_class"] = best["score"].map(thresholds.classify)
+    best["match_class"] = [
+        classify_pair(float(s), str(st), thresholds, stage_thresholds)
+        for s, st in zip(best["score"], best["stage"], strict=False)
+    ]
     best = best[best["match_class"] != NO_MATCH]
     return best.sort_values("score", ascending=False).reset_index(drop=True)[cols]
