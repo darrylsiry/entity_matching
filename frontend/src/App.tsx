@@ -20,6 +20,11 @@ import './App.css'
 
 export type { Mapping } from './mapping'
 
+// ════════════════════════════════════════════════════════════════════════
+// SECTION: Wizard configuration — the step list per mode and the default
+// matching config (mirrors the backend SessionConfig defaults).
+// ════════════════════════════════════════════════════════════════════════
+
 const STEPS: Record<Mode, string[]> = {
   link: ['Mode', 'Upload', 'Map columns', 'Configure', 'Run', 'Results'],
   dedupe: ['Mode', 'Upload', 'Configure', 'Run', 'Results'],
@@ -42,8 +47,12 @@ export const DEFAULT_CONFIG: SessionConfig = {
   stage_thresholds: null,
 }
 
-// ---- session persistence: results survive refresh and are link-shareable ----
-// The completed session lives in the URL hash (#s=<id>&m=<mode>) and localStorage.
+// ════════════════════════════════════════════════════════════════════════
+// SECTION: Session persistence — results survive refresh and are shareable
+// The completed session lives in the URL hash (#s=<id>&m=<mode>) and
+// localStorage; on load we offer a "Resume results" banner if the server
+// still has the results.
+// ════════════════════════════════════════════════════════════════════════
 
 const STORAGE_KEY = 'entity-matching:last-session'
 
@@ -79,6 +88,13 @@ function saveSession(saved: SavedSession | null) {
     /* private mode etc. — persistence is best-effort */
   }
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// SECTION: The wizard shell
+// Owns all cross-step state (mode, uploads, mappings, id types, config,
+// session id) and renders whichever step component is current. Step
+// components stay stateless about the overall flow.
+// ════════════════════════════════════════════════════════════════════════
 
 export default function App() {
   const [mode, setMode] = useState<Mode>('link')
