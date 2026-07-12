@@ -13,6 +13,12 @@ from __future__ import annotations
 
 import pandas as pd
 
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Union-find (disjoint set) — near-linear connected components
+# union(a, b) merges two rows' groups; find(x) returns a group's root with
+# path compression. No dependencies, scales to 100k+ rows easily.
+# ══════════════════════════════════════════════════════════════════════════
+
 
 class _UnionFind:
     def __init__(self, n: int) -> None:
@@ -36,6 +42,13 @@ class _UnionFind:
         self.parent[rb] = ra
         if self.rank[ra] == self.rank[rb]:
             self.rank[ra] += 1
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Master-ID assignment — links in, one master_id per row out
+# Rows transitively connected by any link become one entity; unlinked rows are
+# singletons. IDs are numbered by smallest member row so re-runs are stable.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 def assign_master_ids(n_rows: int, links: pd.DataFrame) -> pd.DataFrame:

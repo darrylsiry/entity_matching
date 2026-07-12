@@ -1,3 +1,6 @@
+// Wizard "Run" step — creates the session, starts the background matching job,
+// polls /status every 500ms into a progress bar, and on completion shows the
+// summary counts + per-stage timings. "View results" hands the session id up.
 import { useEffect, useRef, useState } from 'react'
 import {
   createSession,

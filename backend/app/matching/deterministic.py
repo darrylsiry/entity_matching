@@ -22,6 +22,10 @@ import pandas as pd
 
 from .schema import NORM_DOMAIN, CanonicalField, norm_col
 
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Constants — score, key columns, and key priority
+# ══════════════════════════════════════════════════════════════════════════
+
 # Score assigned to a confident deterministic hit. Just under 1.0 so a later
 # corroborating signal could in principle nudge it, but comfortably above any match
 # threshold.
@@ -40,6 +44,12 @@ def _empty_pairs() -> pd.DataFrame:
     return pd.DataFrame(columns=["idx_a", "idx_b", "score", "stage", "rule"])
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Building block — exact join on one normalized key
+# Empty values never join (a blank domain shouldn't match another blank).
+# ══════════════════════════════════════════════════════════════════════════
+
+
 def _exact_join(a: pd.DataFrame, b: pd.DataFrame, key: str, rule: str) -> pd.DataFrame:
     """Inner-join two frames on a normalized key, ignoring empty keys."""
     left = a.loc[a[key] != "", [key]].rename_axis("idx_a").reset_index()
@@ -53,6 +63,16 @@ def _exact_join(a: pd.DataFrame, b: pd.DataFrame, key: str, rule: str) -> pd.Dat
     merged["stage"] = "deterministic"
     merged["rule"] = rule
     return merged[["idx_a", "idx_b", "score", "stage", "rule"]]
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Guards
+# 1) ID-type guard: a DUNS in file A must not join an EIN in file B just
+#    because the digits collide.
+# 2) Corroboration guard: a shared domain/phone whose two NAMES look unrelated
+#    (subsidiaries, shared switchboards) is demoted to the review band instead
+#    of auto-matching at 0.99. Registration-id matches are never demoted.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 def _id_types_compatible(id_type_a: str, id_type_b: str) -> bool:
@@ -90,6 +110,13 @@ def _apply_corroboration(
     out["score"] = scores
     out["rule"] = rules
     return out
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Entry points — two-file (link) and single-file (dedupe) matching
+# Both run the same key sequence (registration_id → domain → phone) with the
+# guards above; the dedupe variant self-joins and keeps only i<j pairs.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 def match_deterministic(

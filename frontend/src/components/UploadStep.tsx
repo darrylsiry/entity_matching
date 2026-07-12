@@ -1,3 +1,6 @@
+// Wizard step 2 — upload one file (dedupe) or two files (link). Each dropzone
+// posts the file to /api/upload and shows the detected row/column counts; the
+// "test data" links one-click-load the bundled sample CSVs.
 import { useState } from 'react'
 import { uploadFile, type Mode, type UploadResponse } from '../api'
 
@@ -10,6 +13,11 @@ interface Props {
   onBack: () => void
   onNext: () => void
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// SECTION: DropZone — one upload target (file picker + optional test-data
+// link). Handles its own busy/error state and reports the parsed upload up.
+// ════════════════════════════════════════════════════════════════════════
 
 function DropZone({
   label,
@@ -91,6 +99,11 @@ function DropZone({
     </div>
   )
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// SECTION: Step component — renders one or two dropzones by mode and gates
+// "Next" until the required file(s) are uploaded.
+// ════════════════════════════════════════════════════════════════════════
 
 export function UploadStep({ mode, uploadA, uploadB, onA, onB, onBack, onNext }: Props) {
   const dedupe = mode === 'dedupe'

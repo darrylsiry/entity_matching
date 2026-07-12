@@ -1,3 +1,5 @@
+// Wizard step 1 — choose between the two matching modes: "compare two files"
+// (link) or "deduplicate one file" (dedupe). Picking a card advances to Upload.
 import type { Mode } from '../api'
 
 interface Props {

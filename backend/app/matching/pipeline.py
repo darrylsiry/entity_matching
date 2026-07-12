@@ -35,6 +35,15 @@ from .scoring import (
 ProgressCb = Callable[[str, float], None]  # (stage label, progress 0..1)
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Configuration + result containers
+# MatchConfig mirrors the API's SessionConfig (see app/models.py); MatchResult
+# bundles everything a caller needs — classified pairs, the raw pre-
+# classification pair pool (kept so thresholds can change without re-running),
+# unmatched row indices, and summary counts.
+# ══════════════════════════════════════════════════════════════════════════
+
+
 @dataclass
 class MatchConfig:
     """Toggles + thresholds chosen in the frontend's Configure step."""
@@ -80,6 +89,16 @@ class MatchResult:
 
 def _noop(_stage: str, _p: float) -> None:
     pass
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: The cascade itself (link mode)
+# Stage 0 normalize → Stage 1 deterministic → Stage 2 Splink → Stage 3 fuzzy
+# → Stage 4 classify. After each stage, records it CONFIDENTLY resolved
+# (score >= the Match threshold) are removed from the pool, so later, fuzzier
+# stages only work the residuals. Finally, rows in no pair are reported as
+# "unique" so per-file counts reconcile: matched + review + unique == rows.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 def run_pipeline(
@@ -197,6 +216,13 @@ def run_pipeline(
         norm_b=norm_b,
         counts=counts,
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Frame helpers — normalize stage outputs to one schema, and build
+# the single-sided "unique" rows (sentinel -1 on the empty side) that make the
+# stored results reconcile against each file's total row count.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 def _with_pair_cols(pairs: pd.DataFrame) -> pd.DataFrame:

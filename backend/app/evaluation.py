@@ -39,6 +39,12 @@ def _unavailable(reason: str) -> dict:
     return {"available": False, "reason": reason}
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Ground-truth loading — per-session upload wins, repo file is the
+# developer fallback, otherwise evaluation is unavailable.
+# ══════════════════════════════════════════════════════════════════════════
+
+
 def _load_gt_frame(session_id: str) -> tuple[pd.DataFrame | None, str]:
     """Session-uploaded ground truth wins; the repo file is the developer fallback."""
     session_gt = storage.load_ground_truth(session_id)
@@ -47,6 +53,13 @@ def _load_gt_frame(session_id: str) -> tuple[pd.DataFrame | None, str]:
     if GROUND_TRUTH_PATH.exists():
         return pd.read_csv(GROUND_TRUTH_PATH, dtype=str, keep_default_na=False), "repo"
     return None, "none"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Scoring — compare the session's current match set (auto matches +
+# user-confirmed reviews) to the ground truth and report precision/recall/F1.
+# Comparison is keyed on lightly-normalized (A name, B name) string pairs.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 def evaluate(session_id: str) -> dict:
@@ -110,6 +123,13 @@ def evaluate(session_id: str) -> dict:
         "predicted_total": len(predicted),
         **(suggestion or {}),
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Threshold suggestion — sweep candidate match thresholds over the
+# stored pair pool, score each against ground truth, return the best-F1 point.
+# Turns threshold tuning from guesswork into measurement.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 def _suggest_threshold(

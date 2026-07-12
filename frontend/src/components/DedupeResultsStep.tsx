@@ -1,3 +1,7 @@
+// Results screen (dedupe mode) — master-ID clusters plus the "possible
+// duplicates" review queue. Confirming a candidate merges the two rows into
+// one master ID; the CSV export is the original file annotated with
+// master_id/cluster_size, reflecting those decisions.
 import { useCallback, useEffect, useState } from 'react'
 import {
   downloadUrl,
@@ -27,6 +31,12 @@ const CAND_FILTERS = [
   { key: 'confirmed', label: 'Confirmed' },
   { key: 'dismissed', label: 'Dismissed' },
 ]
+
+// ════════════════════════════════════════════════════════════════════════
+// SECTION: Main screen — one loader serving two views: cluster tabs
+// (duplicates/all/unique) and the possible-duplicates queue (pending/
+// confirmed/dismissed). Decisions reload the current page + counts.
+// ════════════════════════════════════════════════════════════════════════
 
 export function DedupeResultsStep({ sessionId, onReset }: Props) {
   const [counts, setCounts] = useState<Record<string, number>>({})
@@ -202,6 +212,11 @@ export function DedupeResultsStep({ sessionId, onReset }: Props) {
   )
 }
 
+// ════════════════════════════════════════════════════════════════════════
+// SECTION: Candidate card — one possible-duplicate pair with score, decision
+// badges, "Same company"/"Not a match"/Undo actions, and a side-by-side diff.
+// ════════════════════════════════════════════════════════════════════════
+
 function CandidateCard({
   cand,
   onDecide,
@@ -269,6 +284,11 @@ function CandidateCard({
     </div>
   )
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// SECTION: Cluster card — one master-ID group; member rows as columns with
+// differing field values highlighted.
+// ════════════════════════════════════════════════════════════════════════
 
 function ClusterCard({ cluster }: { cluster: Cluster }) {
   const dup = cluster.size > 1

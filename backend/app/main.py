@@ -15,6 +15,11 @@ from .api.routes import router
 
 logging.basicConfig(level=logging.INFO)
 
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: App assembly — create the FastAPI app, allow the Vite dev server
+# via CORS, mount the /api routes, and init the on-disk storage dirs.
+# ══════════════════════════════════════════════════════════════════════════
+
 app = FastAPI(title="Entity Matching", version="0.1.0")
 
 # Dev CORS: allow the Vite dev server. In production the built frontend is served
@@ -38,6 +43,10 @@ def _startup() -> None:
 def health() -> dict:
     return {"status": "ok"}
 
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Production static serving — one process serves API + React app
+# ══════════════════════════════════════════════════════════════════════════
 
 # Serve the compiled frontend (if present) from the same origin. FRONTEND_DIST points
 # at the Vite build output; the Docker image copies it in. Mounted LAST so it only

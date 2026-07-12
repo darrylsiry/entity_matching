@@ -30,7 +30,10 @@ def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
 
-# ---- uploads ---------------------------------------------------------------
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Uploads — each uploaded table is stored once as parquet (all
+# columns as strings) plus a small JSON of metadata, keyed by file_id.
+# ══════════════════════════════════════════════════════════════════════════
 
 def save_upload(df: pd.DataFrame, filename: str) -> tuple[str, list[str]]:
     """Persist an uploaded dataframe; return (file_id, column names)."""
@@ -58,7 +61,10 @@ def upload_meta(file_id: str) -> dict:
     return json.loads(path.read_text())
 
 
-# ---- session config --------------------------------------------------------
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Session config — the full CreateSessionRequest (mode, file ids,
+# mappings, thresholds) saved as JSON so runs are reproducible/re-readable.
+# ══════════════════════════════════════════════════════════════════════════
 
 def save_session_meta(session_id: str, meta: dict) -> None:
     (SESSION_DIR / f"{session_id}.json").write_text(json.dumps(meta))
@@ -71,7 +77,10 @@ def load_session_meta(session_id: str) -> dict:
     return json.loads(path.read_text())
 
 
-# ---- session results -------------------------------------------------------
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Session results — the classified output frame (match/review pairs
+# + unique rows in link mode; row→master_id clusters in dedupe mode).
+# ══════════════════════════════════════════════════════════════════════════
 
 def save_result(session_id: str, results: pd.DataFrame) -> None:
     results.to_parquet(SESSION_DIR / f"{session_id}_results.parquet", index=False)
@@ -88,7 +97,11 @@ def result_exists(session_id: str) -> bool:
     return (SESSION_DIR / f"{session_id}_results.parquet").exists()
 
 
-# ---- all stage-emitted pairs (for reclassify-without-rerun, link mode) ------
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: All stage-emitted pairs (link mode) — the pre-classification pool.
+# Kept so thresholds can be changed and results re-classified WITHOUT
+# re-running the matching pipeline, and so evaluation can sweep thresholds.
+# ══════════════════════════════════════════════════════════════════════════
 
 def save_allpairs(session_id: str, pairs: pd.DataFrame) -> None:
     pairs.to_parquet(SESSION_DIR / f"{session_id}_allpairs.parquet", index=False)
@@ -101,7 +114,10 @@ def load_allpairs(session_id: str) -> pd.DataFrame:
     return pd.read_parquet(path)
 
 
-# ---- user-supplied ground truth (evaluation feature) -------------------------
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: User-supplied ground truth — a labeled sample of true matches the
+# user uploads to score precision/recall against (evaluation feature).
+# ══════════════════════════════════════════════════════════════════════════
 
 def save_ground_truth(session_id: str, df: pd.DataFrame) -> None:
     df.to_parquet(SESSION_DIR / f"{session_id}_ground_truth.parquet", index=False)
@@ -114,7 +130,10 @@ def load_ground_truth(session_id: str) -> pd.DataFrame | None:
     return pd.read_parquet(path)
 
 
-# ---- dedupe "possible duplicate" candidates (review-band within-file pairs) ---
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Dedupe candidates — review-band within-file pairs ("possible
+# duplicates") stored separately from the confident clusters.
+# ══════════════════════════════════════════════════════════════════════════
 
 def save_candidates(session_id: str, candidates: pd.DataFrame) -> None:
     candidates.to_parquet(SESSION_DIR / f"{session_id}_candidates.parquet", index=False)
@@ -127,7 +146,10 @@ def load_candidates(session_id: str) -> pd.DataFrame:
     return pd.read_parquet(path)
 
 
-# ---- review decisions (small overlay, kept out of the big result parquet) ---
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Review decisions — tiny JSON overlay {"idxA:idxB": "confirmed"|
+# "dismissed"}. Applied at read time so a click never rewrites the big parquet.
+# ══════════════════════════════════════════════════════════════════════════
 
 def load_decisions(session_id: str) -> dict:
     path = SESSION_DIR / f"{session_id}_decisions.json"

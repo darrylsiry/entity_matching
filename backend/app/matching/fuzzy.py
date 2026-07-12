@@ -26,6 +26,10 @@ _STATE = norm_col(CanonicalField.STATE)
 _POSTCODE = norm_col(CanonicalField.POSTCODE)
 _COUNTRY = norm_col(CanonicalField.COUNTRY)
 
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Tuning constants — blocking key length + corroboration weights
+# ══════════════════════════════════════════════════════════════════════════
+
 _PREFIX_LEN = 4  # chars of each token used as a blocking key
 
 # Corroboration weights. A name match is inherently uncertain; agreeing secondary
@@ -52,6 +56,14 @@ def _empty_pairs() -> pd.DataFrame:
     )
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Blocking — which record pairs are even worth comparing
+# Each record contributes keys (4-char token prefixes + metaphone codes); two
+# records are compared only if they share at least one key. This is what keeps
+# the stage far below A×B comparisons at 100k rows.
+# ══════════════════════════════════════════════════════════════════════════
+
+
 def _block_keys(name: str, phonetic: bool = True) -> list[str]:
     """Blocking keys for a name: 4-char prefixes plus (optionally) metaphone codes.
 
@@ -62,6 +74,15 @@ def _block_keys(name: str, phonetic: bool = True) -> list[str]:
         codes = name_metaphone(name)
         keys.extend(f"m:{c}" for c in codes.split() if c)
     return keys
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Scoring — name similarity + secondary-field corroboration
+# The final score = length-aware name similarity, adjusted up by agreeing
+# location fields and DOWN by a clearly conflicting address (so a coincidental
+# name match goes to review, not auto-accept). Each applied adjustment is
+# recorded as provenance for the review UI.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 def corroborate(
@@ -115,6 +136,14 @@ def name_similarity(a: str, b: str) -> float:
     keeps genuine matches (and typos) high while collapsing subset coincidences.
     """
     return min(fuzz.token_sort_ratio(a, b), fuzz.token_set_ratio(a, b)) / 100.0
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Entry points
+# match_fuzzy (two files): keep each A record's single BEST B match >= threshold.
+# match_fuzzy_within (one file): keep EVERY i<j pair >= threshold so multi-row
+# duplicate clusters link up fully. Both skip records already resolved earlier.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 def match_fuzzy(

@@ -28,6 +28,11 @@ from .schema import (
     norm_col,
 )
 
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Module setup — shared regexes, offline TLD parser, abbreviation table
+# One-time constants used by the normalizers below.
+# ══════════════════════════════════════════════════════════════════════════
+
 # tldextract normally hits the network to refresh the public-suffix list. Pin it to
 # the bundled snapshot so the app works offline and deterministically.
 _TLD = tldextract.TLDExtract(suffix_list_urls=())
@@ -45,6 +50,14 @@ _ABBREVIATIONS = {
     "dev": "development", "tech": "technology", "sys": "systems",
     "sols": "solutions",
 }
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Base cleanup + company-name normalization
+# `_base` is the first step of EVERY normalizer (accent-fold, lowercase, trim).
+# `normalize_name` makes "Acme, Inc." == "ACME INCORPORATED" == "acme";
+# `name_tokens` derives the order-independent blocking key.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 def _base(value: object) -> str:
@@ -91,6 +104,13 @@ def name_tokens(normalized_name: str) -> str:
     toks = sorted(set(normalized_name.split()))
     return " ".join(toks)
 
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Strong identifiers with guards — website domains & registration IDs
+# These feed the deterministic (0.99) stage, so weak/shared values must be
+# dropped here: generic domains (gmail, linkedin, ...) and placeholder/short
+# IDs return "" (= no signal) instead of creating confident false matches.
+# ══════════════════════════════════════════════════════════════════════════
 
 # Domains that many unrelated companies share, so a shared value is NOT evidence of
 # being the same entity (free email, social, and site-builder/hosting domains).
@@ -147,6 +167,13 @@ def normalize_id(value: object) -> str:
     if len(set(cleaned)) == 1:  # e.g. "0000", "aaaa"
         return ""
     return cleaned
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Geography — address/city, country (→ ISO code), state (→ postal
+# code), postcode. Normalizing these lets "USA" == "United States" and
+# "California" == "CA" corroborate matches instead of reading as conflicts.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 def normalize_generic(value: object) -> str:
@@ -242,6 +269,12 @@ def normalize_postcode(value: object) -> str:
     return _NON_ALNUM_RE.sub("", text)
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Phone numbers — parse to E.164 with placeholder guards
+# A shared phone is a strong identifier (like a domain), so invalid or
+# placeholder values must become "" rather than false 0.99 matches.
+# ══════════════════════════════════════════════════════════════════════════
+
 # Phone numbers a company would never uniquely own (placeholders / fiction range).
 _PHONE_PLACEHOLDER_RE = re.compile(r"555\s*-?\s*555|123\s*-?\s*456\s*-?\s*7890")
 
@@ -272,6 +305,13 @@ def normalize_phone(value: object, region: str = "US") -> str:
         return ""
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Phonetic keys (metaphone) — typo-tolerant blocking
+# Sound-alike codes let "Jonson" and "Johnson" land in the same candidate
+# block even though their first letters differ.
+# ══════════════════════════════════════════════════════════════════════════
+
+
 def name_metaphone(normalized_name: str) -> str:
     """Per-token metaphone codes of a normalized name, space-joined ("" on failure).
 
@@ -288,6 +328,13 @@ def name_metaphone(normalized_name: str) -> str:
     except Exception:  # jellyfish missing/odd input -> feature degrades to off
         return ""
 
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Stage 0 entry point — apply all normalizers to a DataFrame
+# Adds one `norm_*` column per canonical field plus the derived columns
+# (domain, phone, name tokens, metaphones). Downstream stages only ever read
+# these normalized columns, never the raw file headers.
+# ══════════════════════════════════════════════════════════════════════════
 
 # Which normalizer to apply per canonical field.
 _FIELD_NORMALIZERS = {

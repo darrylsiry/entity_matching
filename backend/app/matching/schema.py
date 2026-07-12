@@ -11,6 +11,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Canonical fields — the matcher's fixed vocabulary
+# Users map their arbitrary column headers onto these during the wizard.
+# ══════════════════════════════════════════════════════════════════════════
+
 
 class CanonicalField(str, Enum):
     """Fields the matcher understands. `name` is the only strictly required one."""
@@ -34,6 +39,11 @@ class FieldSpec:
     help: str
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Field specs — labels/help text that drive the mapping UI, plus
+# which fields are required. Served verbatim by GET /api/fields.
+# ══════════════════════════════════════════════════════════════════════════
+
 # Ordered spec used to render the column-mapping UI and validate mappings.
 FIELD_SPECS: list[FieldSpec] = [
     FieldSpec(CanonicalField.NAME, "Company name", True, "Legal or trading name."),
@@ -51,6 +61,11 @@ FIELD_SPECS: list[FieldSpec] = [
 ]
 
 REQUIRED_FIELDS = [s.field for s in FIELD_SPECS if s.required]
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Normalized/derived column names — the "norm_*" columns Stage 0 adds
+# to every frame; all later stages read these, never the raw file headers.
+# ══════════════════════════════════════════════════════════════════════════
 
 # Derived columns produced by normalization (prefix keeps them clear of raw data).
 NORM_PREFIX = "norm_"
