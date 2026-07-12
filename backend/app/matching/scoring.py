@@ -11,6 +11,12 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Classification labels + the shared pair schema
+# These string constants and PAIR_COLS are the vocabulary every stage and the
+# API speak; change them here and everything downstream follows.
+# ══════════════════════════════════════════════════════════════════════════
+
 MATCH = "match"
 REVIEW = "review"
 NO_MATCH = "no_match"
@@ -25,6 +31,14 @@ PAIR_COLS = ["idx_a", "idx_b", "score", "stage", "rule", "adjustments"]
 
 # stage name -> (match_override | None, review_override | None)
 StageThresholds = dict[str, tuple[float | None, float | None]]
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Thresholds — the score bands, with optional per-stage overrides
+# Scores from different stages sit on different scales (deterministic 0.99,
+# Splink probability, fuzzy adjusted ratio), so classify_pair lets a specific
+# stage carry its own match/review cutoffs; unset values inherit the globals.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 @dataclass(frozen=True)
@@ -61,6 +75,13 @@ def classify_pair(
     if score >= review_t:
         return REVIEW
     return NO_MATCH
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Stage 4 (link mode) — combine all stages' pairs and classify
+# Dedup to the single best pair per A record (highest score wins), band each
+# by threshold, and drop everything below the review band.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 def combine_and_classify(

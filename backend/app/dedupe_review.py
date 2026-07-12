@@ -21,6 +21,12 @@ CONFIRMED = "confirmed"
 DISMISSED = "dismissed"
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Candidate decision store — confirm/dismiss/undo on a "possible
+# duplicate" pair. Keys are order-normalized (lo:hi) since pairs are undirected.
+# ══════════════════════════════════════════════════════════════════════════
+
+
 def pair_key(idx_a: int, idx_b: int) -> str:
     lo, hi = sorted((int(idx_a), int(idx_b)))
     return f"{lo}:{hi}"
@@ -44,6 +50,14 @@ def set_candidate_decision(session_id: str, idx_a: int, idx_b: int, decision: st
     else:
         decisions[key] = decision
     storage.save_decisions(session_id, decisions)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Effective clustering — base clusters + confirmed merges
+# Confirming a candidate adds its link and the connected components are
+# recomputed, so the two rows' clusters merge into one master ID. Dismissed/
+# pending candidates add nothing.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 def _base_links(base: pd.DataFrame) -> list[tuple[int, int]]:
@@ -72,6 +86,12 @@ def effective_clusters(session_id: str) -> pd.DataFrame:
     link_df = pd.DataFrame(links, columns=["idx_a", "idx_b"]) if links else \
         pd.DataFrame(columns=["idx_a", "idx_b"])
     return cluster.assign_master_ids(n, link_df)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Views + counts — candidates annotated with their decision state,
+# and summary counts over the effective clustering for the UI.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 def candidate_view(session_id: str) -> pd.DataFrame:

@@ -40,6 +40,11 @@ MAX_UPLOAD_BYTES = 100 * 1024 * 1024   # 100 MB
 MAX_UPLOAD_ROWS = 500_000
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Field metadata — the canonical fields the mapping UI renders
+# ══════════════════════════════════════════════════════════════════════════
+
+
 @router.get("/fields", response_model=list[FieldSpecOut])
 def get_fields() -> list[FieldSpecOut]:
     """Canonical fields the user maps their columns onto."""
@@ -47,6 +52,12 @@ def get_fields() -> list[FieldSpecOut]:
         FieldSpecOut(field=s.field, label=s.label, required=s.required, help=s.help)
         for s in FIELD_SPECS
     ]
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Uploads — parse CSV/XLSX (size- and row-capped), persist to storage,
+# return the detected columns + sample rows for the mapping step.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 def _read_table(raw: bytes, filename: str) -> pd.DataFrame:
@@ -90,6 +101,13 @@ async def upload(file: UploadFile = File(...)) -> UploadResponse:
         file_id=file_id, filename=file.filename or "upload.csv",
         rows=int(len(df)), columns=col_info,
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Session creation + async run/status
+# create_session validates files/mappings and persists the request; run kicks
+# the matching job off-request via BackgroundTasks; status is what the UI polls.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 @router.post("/session", response_model=CreateSessionResponse)
@@ -154,6 +172,12 @@ def _status(session_id: str) -> StatusResponse:
     )
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Link-mode results — paginated pairs from the EFFECTIVE view
+# (review decisions applied), filterable by class; "dismissed" is an audit view.
+# ══════════════════════════════════════════════════════════════════════════
+
+
 @router.get("/session/{session_id}/results", response_model=ResultsResponse)
 def get_results(
     session_id: str,
@@ -188,6 +212,13 @@ def get_results(
         session_id=session_id, total=total, page=page, page_size=page_size,
         counts=counts, pairs=[MatchPair(**p) for p in enriched],
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Review decisions — single and bulk confirm/dismiss/undo
+# Mode-aware: link mode decides review PAIRS; dedupe mode decides possible-
+# duplicate CANDIDATES (confirm merges the rows' clusters).
+# ══════════════════════════════════════════════════════════════════════════
 
 
 @router.post("/session/{session_id}/decision", response_model=DecisionResponse)
@@ -241,6 +272,11 @@ def decide_bulk(session_id: str, req: BulkDecisionRequest) -> DecisionResponse:
     return DecisionResponse(session_id=session_id, counts=counts)
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Threshold re-classification — instant re-banding of stored scores
+# ══════════════════════════════════════════════════════════════════════════
+
+
 @router.post("/session/{session_id}/reclassify", response_model=ReclassifyResponse)
 def reclassify(session_id: str, req: ReclassifyRequest) -> ReclassifyResponse:
     """Change thresholds and re-run classification on stored scores (no re-matching)."""
@@ -259,6 +295,12 @@ def reclassify(session_id: str, req: ReclassifyRequest) -> ReclassifyResponse:
         min_stored_score=summary["min_stored_score"],
         counts=review.effective_counts(session_id),
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Evaluation — upload a labeled ground-truth sample and score the
+# session against it (P/R/F1 + suggested threshold). GET re-scores anytime.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 @router.post("/session/{session_id}/ground_truth", response_model=EvaluationResponse)
@@ -297,6 +339,12 @@ def get_evaluation(session_id: str) -> EvaluationResponse:
     except FileNotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
     return EvaluationResponse(**result)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Dedupe-mode results — master-ID clusters (reflecting confirmed
+# merges) and the paginated possible-duplicates review queue.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 def _session_mode(session_id: str) -> str:
@@ -377,6 +425,14 @@ def get_candidates(
         counts=dedupe_review.counts(session_id),
         candidates=[DedupeCandidate(**c) for c in enriched],
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: CSV export — the final dataset, reflecting all review decisions
+# Link mode: matched pairs (confirmed reviews included, dismissed as unique).
+# Dedupe mode: the original file + master_id/cluster_size columns.
+# All string cells are sanitized against spreadsheet formula injection.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 @router.get("/session/{session_id}/download")

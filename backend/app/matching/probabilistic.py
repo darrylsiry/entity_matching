@@ -43,11 +43,23 @@ def _empty_pairs() -> pd.DataFrame:
     return pd.DataFrame(columns=["idx_a", "idx_b", "score", "stage", "rule"])
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Input prep — Splink requires a unique_id column per frame
+# ══════════════════════════════════════════════════════════════════════════
+
+
 def _prep(df: pd.DataFrame) -> pd.DataFrame:
     """Splink needs a unique_id column; use the positional index."""
     out = df.copy()
     out["unique_id"] = out.index.astype("int64")
     return out
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Entry points — thin wrappers over one shared implementation
+# match_probabilistic: two files (link_only, only cross-file pairs).
+# match_probabilistic_within: one file (dedupe_only, within-file pairs).
+# ══════════════════════════════════════════════════════════════════════════
 
 
 def match_probabilistic(
@@ -95,7 +107,17 @@ def match_probabilistic_within(
     )
 
 
-# ---- shared implementation -------------------------------------------------
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Shared implementation — build the Splink model and run it
+# Flow inside _run():
+#   1. choose BLOCKING rules from columns that carry signal (empties excluded)
+#   2. choose field COMPARISONS (name JW + TF, domain/phone/postcode exact, ...)
+#   3. unsupervised TRAINING (u by random sampling, m by EM per blocking rule)
+#   4. PREDICT pairs >= threshold and map Splink ids back to row indices
+# Everything is wrapped defensively: any failure logs a warning and returns an
+# empty frame so the cascade falls through to the fuzzy stage instead of dying.
+# ══════════════════════════════════════════════════════════════════════════
+
 
 def _both_have(a: pd.DataFrame, b: pd.DataFrame, col: str) -> bool:
     return col in a and col in b and (a[col] != "").any() and (b[col] != "").any()
@@ -210,6 +232,12 @@ def _run(
     if pred is None or pred.empty:
         return _empty_pairs()
     return orient(pred)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Output shaping — map Splink's predictions back to (idx_a, idx_b)
+# pairs in the pipeline's standard schema.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 def _orient_link_only(pred: pd.DataFrame) -> pd.DataFrame:

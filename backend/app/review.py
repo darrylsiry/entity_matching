@@ -35,6 +35,13 @@ def _ensure_cols(frame: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Decision store — record confirm/dismiss/undo on a review pair
+# Decisions live in a tiny JSON sidecar keyed "idxA:idxB"; only pairs that are
+# actually in the REVIEW band can be decided.
+# ══════════════════════════════════════════════════════════════════════════
+
+
 def pair_key(idx_a: int, idx_b: int) -> str:
     return f"{int(idx_a)}:{int(idx_b)}"
 
@@ -61,6 +68,15 @@ def set_decision(session_id: str, idx_a: int, idx_b: int, decision: str) -> None
     else:
         decisions[key] = decision
     storage.save_decisions(session_id, decisions)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Effective view — the stored results with decisions applied
+# confirmed review → match; dismissed review → dropped (its records fall back
+# to "unique"); pending → still review. Unique rows are recomputed so the
+# per-file reconciliation (matched + review + unique = rows) always holds.
+# Everything the API serves (results, counts, CSV) reads THIS view.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 def _all_indices(base: pd.DataFrame) -> tuple[set[int], set[int]]:
@@ -137,6 +153,12 @@ def dismissed_frame(session_id: str) -> pd.DataFrame:
     out["match_class"] = DISMISSED
     out["decision"] = DISMISSED
     return out[_COLS]
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Counts — reconciling per-file totals + review-workflow tallies
+# (confirmed/dismissed), all derived from the effective view above.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 def effective_counts(session_id: str) -> dict:

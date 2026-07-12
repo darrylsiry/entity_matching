@@ -22,6 +22,12 @@ from .models import CreateSessionRequest
 logger = logging.getLogger(__name__)
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Config translation — API request (Pydantic) → engine MatchConfig
+# Keeps the matching engine free of any web-layer types.
+# ══════════════════════════════════════════════════════════════════════════
+
+
 def _to_match_config(req: CreateSessionRequest) -> MatchConfig:
     cfg = req.config
     stage_thresholds = None
@@ -47,6 +53,12 @@ def _to_match_config(req: CreateSessionRequest) -> MatchConfig:
         registration_id_type_a=req.registration_id_type_a,
         registration_id_type_b=req.registration_id_type_b,
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Stage timing — piggybacks on the progress callback to measure how
+# long each pipeline stage took; surfaced in the UI after a run.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 class _StageTimer:
@@ -76,6 +88,13 @@ class _StageTimer:
             )
         self.timings.pop("Done", None)  # terminal marker, not a real stage
         return self.timings
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Background job — the entry point BackgroundTasks runs off-request
+# Loads inputs, runs the right pipeline for the mode, persists results (plus
+# the raw pair pool in link mode), and reports state/counts to the registry.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 def run_match_job(session_id: str) -> None:
@@ -122,6 +141,12 @@ def run_match_job(session_id: str) -> None:
         registry.update(session_id, state=JobState.ERROR, error=str(exc))
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Enrichment (link mode) — stored pairs hold only row INDICES; this
+# joins the original uploaded rows back on so the UI/CSV can show full records.
+# ══════════════════════════════════════════════════════════════════════════
+
+
 def enrich_pairs(
     session_id: str, pairs: pd.DataFrame
 ) -> list[dict]:
@@ -166,7 +191,11 @@ def _record(df: pd.DataFrame, idx: int) -> dict:
     return {k: ("" if pd.isna(v) else str(v)) for k, v in row.items()}
 
 
-# ---- dedupe (single-file) helpers ------------------------------------------
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Dedupe helpers — load the single source file, group cluster rows
+# into member lists for the UI, build the annotated download frame (original
+# file + master_id/cluster_size), and enrich candidate pairs with records.
+# ══════════════════════════════════════════════════════════════════════════
 
 def load_dedupe_source(session_id: str) -> pd.DataFrame:
     """The single uploaded file for a dedupe session."""
@@ -198,6 +227,13 @@ def dedupe_download_frame(session_id: str, cluster_rows: pd.DataFrame) -> pd.Dat
     out.insert(0, "master_id", ann["master_id"].reindex(range(len(raw))).values)
     out.insert(1, "cluster_size", ann["cluster_size"].reindex(range(len(raw))).values)
     return out
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Re-classify without re-running — new thresholds over stored scores
+# Rebuilds the results frame from the saved pair pool in milliseconds; the
+# expensive matching stages never re-execute.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 def reclassify(session_id: str, match_t: float, review_t: float) -> dict:

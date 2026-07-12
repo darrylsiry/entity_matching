@@ -18,6 +18,12 @@ export type Cluster = Schemas['ClusterOut']
 export type ClusterMember = Schemas['ClusterMember']
 export type Evaluation = Schemas['EvaluationResponse']
 
+// ════════════════════════════════════════════════════════════════════════
+// SECTION: Hand-written types
+// Kept manual where the generated typing is too loose to be useful (freeform
+// counts dicts) or where the type is a REQUEST we always construct fully.
+// ════════════════════════════════════════════════════════════════════════
+
 export interface SessionConfig {
   use_deterministic: boolean
   use_probabilistic: boolean
@@ -83,6 +89,11 @@ export interface CandidatesResponse {
   candidates: DedupeCandidate[]
 }
 
+// ════════════════════════════════════════════════════════════════════════
+// SECTION: HTTP plumbing — one shared fetch helper that surfaces the
+// backend's error `detail` as a thrown Error message.
+// ════════════════════════════════════════════════════════════════════════
+
 async function jsonOrThrow<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let detail = res.statusText
@@ -95,6 +106,10 @@ async function jsonOrThrow<T>(res: Response): Promise<T> {
   }
   return res.json() as Promise<T>
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// SECTION: Wizard-flow endpoints — fields, upload, session create/run/status
+// ════════════════════════════════════════════════════════════════════════
 
 export async function getFields(): Promise<FieldSpec[]> {
   return jsonOrThrow(await fetch('/api/fields'))
@@ -133,6 +148,10 @@ export async function getStatus(sessionId: string): Promise<StatusResponse> {
   return jsonOrThrow(await fetch(`/api/session/${sessionId}/status`))
 }
 
+// ════════════════════════════════════════════════════════════════════════
+// SECTION: Results endpoints — link-mode pairs and dedupe-mode clusters
+// ════════════════════════════════════════════════════════════════════════
+
 export async function getResults(
   sessionId: string,
   opts: { matchClass?: string; page?: number; pageSize?: number } = {},
@@ -154,6 +173,11 @@ export async function getClusters(
   p.set('page_size', String(opts.pageSize ?? 25))
   return jsonOrThrow(await fetch(`/api/session/${sessionId}/clusters?${p}`))
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// SECTION: Review & tuning endpoints — evaluation vs ground truth, threshold
+// re-classification, and single/bulk review decisions.
+// ════════════════════════════════════════════════════════════════════════
 
 export async function getEvaluation(sessionId: string): Promise<Evaluation> {
   return jsonOrThrow(await fetch(`/api/session/${sessionId}/evaluation`))
@@ -223,6 +247,10 @@ export async function getCandidates(
   p.set('page_size', String(opts.pageSize ?? 25))
   return jsonOrThrow(await fetch(`/api/session/${sessionId}/candidates?${p}`))
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// SECTION: CSV export — a plain link href (browser handles the download)
+// ════════════════════════════════════════════════════════════════════════
 
 export function downloadUrl(sessionId: string): string {
   return `/api/session/${sessionId}/download`

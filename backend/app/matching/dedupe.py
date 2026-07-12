@@ -34,6 +34,13 @@ from .schema import CanonicalField
 _LINK_COLS = ["idx_a", "idx_b", "score", "stage", "rule", "adjustments"]
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Result container
+# clusters = master IDs from CONFIDENT links only; candidates = review-band
+# "possible duplicate" pairs awaiting a human confirm/dismiss.
+# ══════════════════════════════════════════════════════════════════════════
+
+
 @dataclass
 class DedupeResult:
     clusters: pd.DataFrame   # row_idx, master_id, cluster_size (from confident links)
@@ -44,6 +51,14 @@ class DedupeResult:
 
 def _noop(_stage: str, _p: float) -> None:
     pass
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: The dedupe cascade (single-file)
+# Same stages as link mode but every comparison is within one file. Links are
+# then split by confidence: >= Match threshold auto-merge into clusters;
+# review-band links become "possible duplicate" candidates for the user.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 def run_dedupe(
@@ -153,6 +168,12 @@ def run_dedupe(
     return DedupeResult(
         clusters=clusters, candidates=candidates, norm=norm, counts=counts
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Link-frame helpers — schema padding and pair canonicalization
+# (order each pair idx_a < idx_b, keep the best-scoring copy of duplicates)
+# ══════════════════════════════════════════════════════════════════════════
 
 
 def _empty_links() -> pd.DataFrame:

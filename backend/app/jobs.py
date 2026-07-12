@@ -11,6 +11,10 @@ import threading
 from dataclasses import dataclass, field
 from enum import Enum
 
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Job model — one Job per running/finished match session
+# ══════════════════════════════════════════════════════════════════════════
+
 
 class JobState(str, Enum):
     PENDING = "pending"
@@ -27,6 +31,13 @@ class Job:
     progress: float = 0.0
     error: str | None = None
     counts: dict = field(default_factory=dict)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Registry — thread-safe in-memory store, keyed by session_id
+# The background job writes progress here; GET /status reads it. Process-local
+# by design (single machine); swap for Redis to scale out.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 class JobRegistry:

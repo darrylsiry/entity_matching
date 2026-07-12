@@ -8,6 +8,10 @@ from pydantic import BaseModel, Field
 
 from .matching.schema import CanonicalField
 
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Uploads & field metadata — shapes for POST /upload and GET /fields
+# ══════════════════════════════════════════════════════════════════════════
+
 
 class ColumnInfo(BaseModel):
     name: str
@@ -26,6 +30,12 @@ class FieldSpecOut(BaseModel):
     label: str
     required: bool
     help: str
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Matching configuration — everything the Configure step can set.
+# These mirror pipeline.MatchConfig field-for-field (service.py translates).
+# ══════════════════════════════════════════════════════════════════════════
 
 
 class ThresholdConfig(BaseModel):
@@ -64,6 +74,12 @@ class SessionConfig(BaseModel):
     stage_thresholds: dict[str, StageThresholdOverride] | None = None
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Session lifecycle — create a run (files + mappings + config) and
+# poll its status while the background job executes.
+# ══════════════════════════════════════════════════════════════════════════
+
+
 class CreateSessionRequest(BaseModel):
     # "link" compares two files; "dedupe" finds duplicate rows within one file.
     mode: Literal["link", "dedupe"] = "link"
@@ -90,6 +106,13 @@ class StatusResponse(BaseModel):
     progress: float
     error: str | None = None
     counts: dict = Field(default_factory=dict)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Link-mode results + review decisions
+# MatchPair carries full provenance (stage/rule/adjustments) so reviewers see
+# WHY a pair scored what it did; decisions confirm/dismiss review pairs.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 class MatchPair(BaseModel):
@@ -124,6 +147,12 @@ class BulkDecisionRequest(BaseModel):
 class DecisionResponse(BaseModel):
     session_id: str
     counts: dict
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Re-classification + evaluation — change thresholds without a
+# re-run, and score the match set against a ground-truth sample.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 class ReclassifyRequest(BaseModel):
@@ -173,7 +202,10 @@ class ResultsResponse(BaseModel):
     pairs: list[MatchPair]
 
 
-# ---- dedupe (single-file) results ------------------------------------------
+# ══════════════════════════════════════════════════════════════════════════
+# SECTION: Dedupe-mode results — master-ID clusters and the "possible
+# duplicate" candidates awaiting a confirm/dismiss decision.
+# ══════════════════════════════════════════════════════════════════════════
 
 class ClusterMember(BaseModel):
     row_idx: int
