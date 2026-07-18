@@ -1,3 +1,4 @@
+import { useId } from 'react'
 import type { FieldSpec, UploadResponse } from '../api'
 import type { Mapping } from '../mapping'
 
@@ -16,6 +17,8 @@ export function FieldMapper({
   mapping: Mapping
   setMapping: (m: Mapping) => void
 }) {
+  // Unique per FieldMapper instance so File A's selects get ids distinct from File B's.
+  const idBase = useId()
   const columns = upload.columns.map((c) => c.name)
   function set(field: string, col: string) {
     const next = { ...mapping }
@@ -32,27 +35,33 @@ export function FieldMapper({
       )}
       <table className="map-table">
         <tbody>
-          {fields.map((f) => (
-            <tr key={f.field}>
-              <td className="map-field">
-                {f.label}
-                {f.required && <span className="req">*</span>}
-              </td>
-              <td>
-                <select
-                  value={mapping[f.field] ?? ''}
-                  onChange={(e) => set(f.field, e.target.value)}
-                >
-                  <option value="">— not mapped —</option>
-                  {columns.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
-              </td>
-            </tr>
-          ))}
+          {fields.map((f) => {
+            const selectId = `${idBase}-${f.field}`
+            return (
+              <tr key={f.field}>
+                <td className="map-field">
+                  <label htmlFor={selectId}>
+                    {f.label}
+                    {f.required && <span className="req">*</span>}
+                  </label>
+                </td>
+                <td>
+                  <select
+                    id={selectId}
+                    value={mapping[f.field] ?? ''}
+                    onChange={(e) => set(f.field, e.target.value)}
+                  >
+                    <option value="">— not mapped —</option>
+                    {columns.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </td>
+              </tr>
+            )
+          })}
         </tbody>
       </table>
     </div>

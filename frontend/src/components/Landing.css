@@ -83,20 +83,26 @@
   background: var(--primary);
   color: var(--primary-contrast);
 }
-.ld-btn-solid:hover,
+.ld-btn-solid:hover {
+  background: var(--primary-hover);
+}
 .ld-btn-solid:focus-visible {
   background: var(--primary-hover);
-  outline: none;
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
 }
 .ld-btn-ghost {
   background: transparent;
   color: var(--primary);
   border: 1.5px solid var(--border);
 }
-.ld-btn-ghost:hover,
+.ld-btn-ghost:hover {
+  border-color: var(--primary);
+}
 .ld-btn-ghost:focus-visible {
   border-color: var(--primary);
-  outline: none;
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
 }
 .ld-btn-sm {
   font-size: 14px;

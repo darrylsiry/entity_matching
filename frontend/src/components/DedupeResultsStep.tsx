@@ -97,7 +97,7 @@ export function DedupeResultsStep({ sessionId, onReset }: Props) {
       <div className="results-head">
         <h2>Deduplication results</h2>
         <a className="btn btn-primary" href={downloadUrl(sessionId)}>
-          ⬇ Download CSV
+          <span aria-hidden="true">⬇</span> Download CSV
         </a>
       </div>
 
@@ -130,6 +130,7 @@ export function DedupeResultsStep({ sessionId, onReset }: Props) {
           <button
             key={t.key}
             className={`tab ${tab === t.key ? 'active' : ''}`}
+            aria-pressed={tab === t.key}
             onClick={() => {
               setTab(t.key)
               setPage(0)
@@ -147,6 +148,7 @@ export function DedupeResultsStep({ sessionId, onReset }: Props) {
             <button
               key={f.key}
               className={`tab ${candFilter === f.key ? 'active' : ''}`}
+              aria-pressed={candFilter === f.key}
               onClick={() => {
                 setCandFilter(f.key)
                 setPage(0)
@@ -158,7 +160,11 @@ export function DedupeResultsStep({ sessionId, onReset }: Props) {
         </div>
       )}
 
-      {error && <div className="error">{error}</div>}
+      {error && (
+        <div className="error" role="alert">
+          {error}
+        </div>
+      )}
 
       {onPossible ? (
         <>
@@ -204,7 +210,7 @@ export function DedupeResultsStep({ sessionId, onReset }: Props) {
 
       <div className="actions">
         <button className="btn btn-ghost" onClick={onReset}>
-          ↺ Start over
+          <span aria-hidden="true">↺</span> Start over
         </button>
         <span />
       </div>
@@ -230,7 +236,11 @@ function CandidateCard({
     <div className={`pair-card ${cand.decision === 'confirmed' ? 'match' : 'review'}`}>
       <div className="pair-meta">
         <span className="badge review">possible duplicate</span>
-        {cand.decision === 'confirmed' && <span className="badge confirmed">✓ merged</span>}
+        {cand.decision === 'confirmed' && (
+          <span className="badge confirmed">
+            <span aria-hidden="true">✓</span> merged
+          </span>
+        )}
         {cand.decision === 'dismissed' && <span className="badge dismissed">dismissed</span>}
         <span className="score">{(cand.score * 100).toFixed(0)}%</span>
         {cand.stage && <span className="stage-tag">{cand.stage}</span>}
@@ -241,19 +251,19 @@ function CandidateCard({
                 className="btn btn-sm btn-confirm"
                 onClick={() => onDecide(cand, 'confirmed')}
               >
-                ✓ Same company
+                <span aria-hidden="true">✓</span> Same company
               </button>
               <button
                 className="btn btn-sm btn-dismiss"
                 onClick={() => onDecide(cand, 'dismissed')}
               >
-                ✕ Not a match
+                <span aria-hidden="true">✕</span> Not a match
               </button>
             </>
           )}
           {decided && (
             <button className="btn btn-sm btn-ghost" onClick={() => onDecide(cand, 'pending')}>
-              ↺ Undo
+              <span aria-hidden="true">↺</span> Undo
             </button>
           )}
         </span>

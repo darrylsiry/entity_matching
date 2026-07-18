@@ -15,8 +15,9 @@ interface Props {
 }
 
 // ════════════════════════════════════════════════════════════════════════
-// SECTION: DropZone — one upload target (file picker + optional test-data
-// link). Handles its own busy/error state and reports the parsed upload up.
+// SECTION: DropZone — one upload target (file picker + drag-and-drop +
+// optional test-data link). Handles its own busy/error state and reports
+// the parsed upload up.
 // ════════════════════════════════════════════════════════════════════════
 
 function DropZone({
@@ -33,6 +34,7 @@ function DropZone({
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [dragOver, setDragOver] = useState(false)
 
   async function handle(file: File | undefined) {
     if (!file) return
@@ -50,17 +52,32 @@ function DropZone({
   // Fetch the bundled sample CSV and load it into this dropzone as if uploaded.
   async function loadTest(name: string) {
     setError(null)
+    setBusy(true)
     try {
       const res = await fetch(`/${name}`)
       if (!res.ok) throw new Error(`could not load ${name}`)
       await handle(new File([await res.blob()], name, { type: 'text/csv' }))
     } catch (e) {
       setError((e as Error).message)
+    } finally {
+      setBusy(false)
     }
   }
 
   return (
-    <div className={`dropzone ${upload ? 'filled' : ''}`}>
+    <div
+      className={`dropzone ${upload ? 'filled' : ''} ${dragOver ? 'dragover' : ''}`}
+      onDragOver={(e) => {
+        e.preventDefault()
+        setDragOver(true)
+      }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={(e) => {
+        e.preventDefault()
+        setDragOver(false)
+        handle(e.dataTransfer.files?.[0])
+      }}
+    >
       <div className="dropzone-label">{label}</div>
       {upload ? (
         <div className="dropzone-meta">
@@ -70,15 +87,22 @@ function DropZone({
           </span>
         </div>
       ) : (
-        <div className="dropzone-hint">{busy ? 'Uploading…' : 'CSV or Excel'}</div>
+        <div className="dropzone-hint" aria-live="polite">
+          {busy ? 'Uploading…' : 'Drop a CSV or Excel file here, or'}
+        </div>
       )}
       <label className="btn btn-ghost">
         {upload ? 'Replace' : 'Choose file'}
         <input
           type="file"
           accept=".csv,.xlsx,.xls"
-          hidden
-          onChange={(e) => handle(e.target.files?.[0])}
+          className="sr-only"
+          aria-label={`${label}: choose a CSV or Excel file`}
+          onChange={(e) => {
+            handle(e.target.files?.[0])
+            // Reset so picking the same file again still fires onChange.
+            e.target.value = ''
+          }}
         />
       </label>
       {testFile && (
@@ -86,7 +110,7 @@ function DropZone({
           className="test-link"
           href={`/${testFile}`}
           download={testFile}
-          title={`Load ${testFile}`}
+          aria-label={`Load ${testFile}`}
           onClick={(e) => {
             e.preventDefault()
             loadTest(testFile)
@@ -95,7 +119,11 @@ function DropZone({
           test data
         </a>
       )}
-      {error && <div className="error">{error}</div>}
+      {error && (
+        <div className="error" role="alert">
+          {error}
+        </div>
+      )}
     </div>
   )
 }
@@ -135,10 +163,10 @@ export function UploadStep({ mode, uploadA, uploadB, onA, onB, onBack, onNext }:
       </div>
       <div className="actions">
         <button className="btn btn-ghost" onClick={onBack}>
-          ← Back
+          <span aria-hidden="true">←</span> Back
         </button>
         <button className="btn btn-primary" disabled={!ready} onClick={onNext}>
-          {dedupe ? 'Next: configure →' : 'Next: map columns →'}
+          {dedupe ? 'Next: configure' : 'Next: map columns'} <span aria-hidden="true">→</span>
         </button>
       </div>
     </div>

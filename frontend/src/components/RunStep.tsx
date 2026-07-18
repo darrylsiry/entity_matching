@@ -59,17 +59,19 @@ export function RunStep(props: Props) {
     }
   }
 
+  // Recursive timeout (not an interval) so a slow /status response never
+  // overlaps the next poll.
   function poll(id: string) {
-    pollRef.current = window.setInterval(async () => {
+    pollRef.current = window.setTimeout(async () => {
       try {
         const st = await getStatus(id)
         setStatus(st)
         if (st.state === 'done' || st.state === 'error') {
-          if (pollRef.current) window.clearInterval(pollRef.current)
           if (st.state === 'error') setError(st.error ?? 'matching failed')
+        } else {
+          poll(id)
         }
       } catch (e) {
-        if (pollRef.current) window.clearInterval(pollRef.current)
         setError((e as Error).message)
       }
     }, 500)
@@ -77,7 +79,7 @@ export function RunStep(props: Props) {
 
   useEffect(() => {
     return () => {
-      if (pollRef.current) window.clearInterval(pollRef.current)
+      if (pollRef.current) window.clearTimeout(pollRef.current)
     }
   }, [])
 
@@ -96,15 +98,22 @@ export function RunStep(props: Props) {
       {!started ? (
         <div className="run-cta">
           <button className="btn btn-primary btn-lg" onClick={start}>
-            ▶ {dedupe ? 'Start deduplication' : 'Start matching'}
+            <span aria-hidden="true">▶</span> {dedupe ? 'Start deduplication' : 'Start matching'}
           </button>
         </div>
       ) : (
         <div className="progress-box">
-          <div className="progress-bar">
+          <div
+            className="progress-bar"
+            role="progressbar"
+            aria-valuenow={pct}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label={dedupe ? 'Deduplication progress' : 'Matching progress'}
+          >
             <div className="progress-fill" style={{ width: `${pct}%` }} />
           </div>
-          <div className="progress-label">
+          <div className="progress-label" aria-live="polite">
             <span>{status?.stage ?? 'Starting…'}</span>
             <span>{pct}%</span>
           </div>
@@ -148,7 +157,11 @@ export function RunStep(props: Props) {
         </div>
       )}
 
-      {error && <div className="error">{error}</div>}
+      {error && (
+        <div className="error" role="alert">
+          {error}
+        </div>
+      )}
 
       <div className="actions">
         <button
@@ -156,14 +169,14 @@ export function RunStep(props: Props) {
           onClick={props.onBack}
           disabled={started && !done && !error}
         >
-          ← Back
+          <span aria-hidden="true">←</span> Back
         </button>
         <button
           className="btn btn-primary"
           disabled={!done || !props.sessionId}
           onClick={() => props.sessionId && props.onDone(props.sessionId)}
         >
-          View results →
+          View results <span aria-hidden="true">→</span>
         </button>
       </div>
     </div>

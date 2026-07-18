@@ -1,7 +1,32 @@
 .app {
   max-width: 1040px;
   margin: 0 auto;
-  padding: 40px 24px 80px;
+  padding: 24px 24px 80px;
+}
+
+/* Brand bar — the landing wordmark carried into the wizard so both halves
+   read as one app. Clicking it returns to the landing page. */
+.app-top {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding-bottom: 16px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--border);
+}
+.app-brand {
+  font-family: var(--display);
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.app-top-tag {
+  font-family: var(--mono);
+  font-size: 12px;
 }
 
 .app-header h1 {
@@ -97,6 +122,7 @@
   background: var(--panel-2);
   color: var(--text);
   cursor: pointer;
+  touch-action: manipulation;
   transition:
     background 0.15s,
     border-color 0.15s,
@@ -110,7 +136,7 @@
   border-color: var(--muted);
 }
 .btn:disabled {
-  opacity: 0.4;
+  opacity: 0.55;
   cursor: not-allowed;
 }
 .btn-primary {
@@ -121,6 +147,14 @@
 .btn-primary:hover:not(:disabled) {
   background: var(--primary-hover);
   border-color: var(--primary-hover);
+}
+/* Disabled primary drops the cobalt entirely so enabled/disabled can never be
+   confused — gray fill, muted text, no color ambiguity. */
+.btn-primary:disabled {
+  background: var(--panel-2);
+  border-color: var(--border);
+  color: var(--muted);
+  opacity: 1;
 }
 .btn-ghost {
   background: transparent;
@@ -240,10 +274,15 @@
   padding: 28px;
   text-align: center;
   background: var(--panel-2);
+  transition: border-color 0.15s;
 }
 .dropzone.filled {
   border-style: solid;
   border-color: var(--match);
+}
+.dropzone.dragover {
+  border-color: var(--primary);
+  background: var(--primary-soft);
 }
 .dropzone-label {
   font-weight: 700;
@@ -258,6 +297,7 @@
 }
 .dropzone-meta strong {
   display: block;
+  overflow-wrap: anywhere;
 }
 .dropzone-meta span {
   color: var(--muted);
@@ -265,14 +305,15 @@
 }
 .test-link {
   display: block;
-  margin-top: 10px;
-  font-size: 12px;
-  color: var(--muted);
+  margin-top: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--primary);
   text-decoration: underline;
-  text-underline-offset: 2px;
+  text-underline-offset: 3px;
 }
 .test-link:hover {
-  color: var(--primary);
+  color: var(--primary-hover);
 }
 
 /* column mapping */
@@ -418,10 +459,13 @@ select {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 .head-right {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 12px;
 }
 
@@ -481,6 +525,7 @@ select {
 }
 .summary-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   margin: 18px 0;
 }
@@ -532,6 +577,7 @@ select {
   background: transparent;
   color: var(--muted);
   cursor: pointer;
+  touch-action: manipulation;
 }
 .tab.active {
   background: var(--panel-2);
@@ -548,8 +594,9 @@ select {
   border: 1px solid var(--border);
   border-left: 4px solid var(--border);
   border-radius: 12px;
-  padding: 14px 16px;
+  padding: 10px 14px;
   background: var(--panel-2);
+  overflow-x: auto;
 }
 .pair-card.match {
   border-left-color: var(--match);
@@ -766,12 +813,17 @@ select {
 .bulk-bar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   margin: -6px 0 14px;
 }
 
 /* transient success notice */
 .notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   color: var(--match);
   background: var(--match-soft);
   border: 1px solid var(--match);
@@ -780,7 +832,38 @@ select {
   margin-top: 12px;
   margin-bottom: 12px;
   font-size: 14px;
+}
+.notice-close {
+  font: inherit;
+  background: none;
+  border: none;
+  color: inherit;
   cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+}
+
+/* decision toast — confirms each single confirm/dismiss and offers Undo */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(92vw, 640px);
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 8px 30px rgba(16, 32, 46, 0.18);
+  padding: 10px 14px;
+  font-size: 14px;
+  z-index: 20;
+}
+.toast strong {
+  overflow-wrap: anywhere;
 }
 
 /* corroboration provenance chips */
@@ -844,7 +927,10 @@ kbd {
   font-size: 12px;
   margin-left: auto;
 }
+/* The "why did this match" chip — a real button now; clicking expands the
+   plain-English explanation below the card header. */
 .reason {
+  font: inherit;
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -854,11 +940,31 @@ kbd {
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 3px 10px;
-  cursor: help;
+  cursor: pointer;
+}
+.reason:hover,
+.reason[aria-expanded='true'] {
+  border-color: var(--primary);
 }
 .reason-icon {
   font-size: 13px;
   line-height: 1;
+}
+.reason-detail {
+  font-size: 13.5px;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin: 0 0 10px;
+}
+.reason-detail p {
+  margin: 0;
+}
+.reason-detail ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
 }
 .pair-table {
   width: 100%;
@@ -874,7 +980,7 @@ kbd {
   border-bottom: 1px solid var(--border);
 }
 .pair-table td {
-  padding: 4px 8px;
+  padding: 3px 8px;
   vertical-align: top;
 }
 .pair-table td.k {
@@ -898,5 +1004,17 @@ kbd {
   .map-grid,
   .counts {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn,
+  .mode-card,
+  .dropzone,
+  .progress-fill {
+    transition: none;
+  }
+  .mode-card:hover {
+    transform: none;
   }
 }

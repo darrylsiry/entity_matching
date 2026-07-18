@@ -39,6 +39,9 @@ export interface SessionConfig {
   deterministic_name_floor: number
   deterministic_demoted_score: number
   stage_thresholds?: Record<string, { match?: number | null; review?: number | null }> | null
+  // Optional Stage 3.5 — semantic candidates from local embeddings; suggestions
+  // are review-capped server-side. Needs the optional sentence-transformers install.
+  use_embedding?: boolean
 }
 
 export type RegistrationIdType =

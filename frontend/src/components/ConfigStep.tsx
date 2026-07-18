@@ -1,7 +1,7 @@
 // Wizard "Configure" step — toggle the cascade stages, set the Match/Review
 // thresholds, tune advanced options, and (dedupe mode) confirm the auto-
 // detected field mapping. All choices land in the shared SessionConfig.
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import type { FieldSpec, Mode, SessionConfig, UploadResponse } from '../api'
 import type { Mapping } from '../mapping'
 import { FieldMapper } from './FieldMapper'
@@ -68,10 +68,13 @@ export function ConfigStep({
   }
 
   const anyStage = config.use_deterministic || config.use_probabilistic || config.use_fuzzy
+  const reviewAboveMatch = config.thresholds.review > config.thresholds.match
+  const matchSliderId = useId()
+  const reviewSliderId = useId()
 
   const canEditFields = Boolean(mode === 'dedupe' && fields && upload && mapping && setMapping)
   const nameOk = mode !== 'dedupe' || Boolean(mapping?.['name'])
-  const canContinue = anyStage && nameOk
+  const canContinue = anyStage && nameOk && !reviewAboveMatch
 
   return (
     <div>
@@ -95,7 +98,12 @@ export function ConfigStep({
       <div className="stage-list">
         {STAGES.map((s) => (
           <label key={s.key} className={`stage ${config[s.key] ? 'on' : ''}`}>
-            <input type="checkbox" checked={config[s.key]} onChange={() => toggle(s.key)} />
+            <input
+              type="checkbox"
+              checked={config[s.key]}
+              onChange={() => toggle(s.key)}
+              aria-label={s.title}
+            />
             <div>
               <div className="stage-title">{s.title}</div>
               <div className="muted">{s.desc}</div>
@@ -107,8 +115,9 @@ export function ConfigStep({
       <div className="thresholds">
         <h3>Classification thresholds</h3>
         <div className="slider-row">
-          <label>Match ≥ {config.thresholds.match.toFixed(2)}</label>
+          <label htmlFor={matchSliderId}>Match ≥ {config.thresholds.match.toFixed(2)}</label>
           <input
+            id={matchSliderId}
             type="range"
             min={0.5}
             max={1}
@@ -118,8 +127,9 @@ export function ConfigStep({
           />
         </div>
         <div className="slider-row">
-          <label>Review ≥ {config.thresholds.review.toFixed(2)}</label>
+          <label htmlFor={reviewSliderId}>Review ≥ {config.thresholds.review.toFixed(2)}</label>
           <input
+            id={reviewSliderId}
             type="range"
             min={0.5}
             max={1}
@@ -132,23 +142,34 @@ export function ConfigStep({
           Pairs scoring at or above <em>Match</em> are auto-accepted; between <em>Review</em> and{' '}
           <em>Match</em> are flagged for a human; below are dropped.
         </p>
+        {reviewAboveMatch && (
+          <div className="error" role="alert">
+            Review ({config.thresholds.review.toFixed(2)}) is above Match (
+            {config.thresholds.match.toFixed(2)}) — nothing would land in the review band. Lower
+            Review or raise Match.
+          </div>
+        )}
       </div>
 
       <AdvancedPanel config={config} setConfig={setConfig} />
 
-      {!anyStage && <div className="error">Enable at least one stage.</div>}
+      {!anyStage && (
+        <div className="error" role="alert">
+          Enable at least one stage.
+        </div>
+      )}
       {!nameOk && (
-        <div className="error">
+        <div className="error" role="alert">
           Company name isn&apos;t detected — open “Detected fields” above and pick the name column
           to continue.
         </div>
       )}
       <div className="actions">
         <button className="btn btn-ghost" onClick={onBack}>
-          ← Back
+          <span aria-hidden="true">←</span> Back
         </button>
         <button className="btn btn-primary" disabled={!canContinue} onClick={onNext}>
-          Next: run →
+          Next: run <span aria-hidden="true">→</span>
         </button>
       </div>
     </div>
@@ -158,12 +179,17 @@ export function ConfigStep({
 // ════════════════════════════════════════════════════════════════════════
 // SECTION: Advanced matching options — collapsible panel for the Phase-1
 // feature flags (phone matching, phonetic blocking, rare-name weighting,
-// domain/phone corroboration guard). All default ON.
+// domain/phone corroboration guard — default ON) plus the opt-in semantic
+// stage (default OFF; needs the optional sentence-transformers install).
 // ════════════════════════════════════════════════════════════════════════
 
 const ADVANCED_TOGGLES: {
   key:
-    'use_phone' | 'use_phonetic_blocking' | 'splink_tf_adjustments' | 'deterministic_corroboration'
+    | 'use_phone'
+    | 'use_phonetic_blocking'
+    | 'splink_tf_adjustments'
+    | 'deterministic_corroboration'
+    | 'use_embedding'
   title: string
   desc: string
 }[] = [
@@ -187,6 +213,11 @@ const ADVANCED_TOGGLES: {
     title: 'Guard shared domains/phones',
     desc: 'A shared website or phone with totally different names goes to review instead of auto-matching.',
   },
+  {
+    key: 'use_embedding',
+    title: 'Semantic matching (embeddings)',
+    desc: 'Catch names no string metric can — "IBM" ↔ "International Business Machines" — with a small local model. Suggestions go to review only, never auto-match. Needs the optional sentence-transformers install; skipped (with a warning in the run log) if it isn\'t present.',
+  },
 ]
 
 function AdvancedPanel({
@@ -203,7 +234,8 @@ function AdvancedPanel({
         <div>
           <strong>Advanced matching options</strong>{' '}
           <span className="muted small">
-            {ADVANCED_TOGGLES.filter((t) => config[t.key]).length}/{ADVANCED_TOGGLES.length} enabled
+            {ADVANCED_TOGGLES.filter((t) => Boolean(config[t.key])).length}/
+            {ADVANCED_TOGGLES.length} enabled
           </span>
         </div>
         <button className="btn btn-ghost btn-sm" onClick={() => setOpen((v) => !v)}>
@@ -217,8 +249,9 @@ function AdvancedPanel({
               <label key={t.key} className={`stage ${config[t.key] ? 'on' : ''}`}>
                 <input
                   type="checkbox"
-                  checked={config[t.key]}
+                  checked={Boolean(config[t.key])}
                   onChange={() => setConfig({ ...config, [t.key]: !config[t.key] })}
+                  aria-label={t.title}
                 />
                 <div>
                   <div className="stage-title">{t.title}</div>

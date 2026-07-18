@@ -2,7 +2,7 @@
 // fields. Mappings are auto-guessed from the headers on first render; a
 // registration-ID *type* can be declared per file so cross-type numeric
 // collisions (DUNS vs EIN) never join.
-import { useEffect } from 'react'
+import { useEffect, useId } from 'react'
 import type { FieldSpec, RegistrationIdType, UploadResponse } from '../api'
 import { autoMap, type Mapping } from '../mapping'
 import { FieldMapper } from './FieldMapper'
@@ -45,10 +45,17 @@ function IdTypeSelect({
   value: RegistrationIdType
   onChange: (t: RegistrationIdType) => void
 }) {
+  const selectId = useId()
   return (
     <div className="id-type-row">
-      <label className="muted small">ID type</label>
-      <select value={value} onChange={(e) => onChange(e.target.value as RegistrationIdType)}>
+      <label className="muted small" htmlFor={selectId}>
+        ID type
+      </label>
+      <select
+        id={selectId}
+        value={value}
+        onChange={(e) => onChange(e.target.value as RegistrationIdType)}
+      >
         {ID_TYPES.map((t) => (
           <option key={t.value} value={t.value}>
             {t.label}
@@ -121,13 +128,17 @@ export function ColumnMapStep(props: Props) {
           won&apos;t be joined across them — matching will rely on the other fields.
         </p>
       )}
-      {!nameMapped && <div className="error">Map the company name in both files to continue.</div>}
+      {!nameMapped && (
+        <div className="error" role="alert">
+          Map the company name in both files to continue.
+        </div>
+      )}
       <div className="actions">
         <button className="btn btn-ghost" onClick={props.onBack}>
-          ← Back
+          <span aria-hidden="true">←</span> Back
         </button>
         <button className="btn btn-primary" disabled={!nameMapped} onClick={props.onNext}>
-          Next: configure →
+          Next: configure <span aria-hidden="true">→</span>
         </button>
       </div>
     </div>

@@ -27,12 +27,13 @@
   --primary-soft: rgba(32, 73, 199, 0.1);
   --match: #1e8a4c;
   --match-soft: rgba(30, 138, 76, 0.12);
-  --review: #b87710;
+  /* dark enough for 4.5:1 text contrast on the soft amber tint at badge sizes */
+  --review: #8f5c07;
   --review-soft: rgba(184, 119, 16, 0.13);
   --danger: #c22f2f;
   --danger-soft: rgba(194, 47, 47, 0.1);
   --muted-soft: rgba(90, 102, 120, 0.14);
-  --diff: #9a6700;
+  --diff: #7d5400;
   --panel-shadow: 0 1px 2px rgba(16, 32, 46, 0.04), 0 8px 24px rgba(16, 32, 46, 0.05);
 }
 
@@ -85,4 +86,24 @@ h2,
 h3 {
   font-family: var(--display);
   letter-spacing: 0.005em;
+}
+
+/* Visually hidden but present for keyboard and screen-reader users — the
+   accessible replacement for `hidden` on file inputs. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* One consistent keyboard-focus ring everywhere (mouse clicks don't show it). */
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
 }

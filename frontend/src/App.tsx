@@ -46,6 +46,7 @@ export const DEFAULT_CONFIG: SessionConfig = {
   deterministic_name_floor: 0.3,
   deterministic_demoted_score: 0.8,
   stage_thresholds: null,
+  use_embedding: false,
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -182,22 +183,42 @@ export default function App() {
 
   return (
     <div className="app">
+      <div className="app-top">
+        <button
+          className="app-brand"
+          onClick={() => setShowLanding(true)}
+          aria-label="Entity Matching — about this tool"
+        >
+          Entity
+          <span className="ld-tick" aria-hidden="true">
+            ≡
+          </span>
+          Matching
+        </button>
+        <span className="app-top-tag muted small">open-source record linkage, run locally</span>
+      </div>
       <header className="app-header">
         <h1>Entity Matching</h1>
         <p>Find identical company records — across two files or within one.</p>
       </header>
 
-      <ol className="stepper">
-        {steps.map((label, i) => (
-          <li
-            key={label}
-            className={`step ${i === step ? 'active' : ''} ${i < step ? 'done' : ''}`}
-          >
-            <span className="dot">{i < step ? '✓' : i + 1}</span>
-            {label}
-          </li>
-        ))}
-      </ol>
+      <nav aria-label="Wizard progress">
+        <ol className="stepper">
+          {steps.map((label, i) => (
+            <li
+              key={label}
+              className={`step ${i === step ? 'active' : ''} ${i < step ? 'done' : ''}`}
+              aria-current={i === step ? 'step' : undefined}
+            >
+              <span className="dot" aria-hidden="true">
+                {i < step ? '✓' : i + 1}
+              </span>
+              {i < step && <span className="sr-only">(done) </span>}
+              {label}
+            </li>
+          ))}
+        </ol>
+      </nav>
 
       <main className="panel">
         {current === 'Mode' && resumable && (

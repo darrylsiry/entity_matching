@@ -2,7 +2,7 @@
 // filter tabs, and pair cards with full provenance; supports single/bulk
 // confirm-dismiss, keyboard review (↑↓/jk + y/n/u), instant threshold
 // re-classification, ground-truth evaluation, and CSV export.
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import {
   downloadUrl,
   getEvaluation,
@@ -46,6 +46,13 @@ export function ResultsStep({ sessionId, onReset }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [focused, setFocused] = useState(0)
+  // Last single decision, surfaced as a transient toast with an Undo button.
+  const [toast, setToast] = useState<{ pair: MatchPair; decision: Decision } | null>(null)
+  const toastTimer = useRef<number | null>(null)
+  // Bulk actions: two-step inline confirm + busy flag so double-clicks can't
+  // fire duplicate bulk posts.
+  const [bulkArming, setBulkArming] = useState<Decision | null>(null)
+  const [bulkBusy, setBulkBusy] = useState(false)
 
   // Accuracy vs ground truth (uploaded per session, or the repo's developer file).
   // Refreshes after decisions since confirming/dismissing changes the match set.
@@ -73,22 +80,33 @@ export function ResultsStep({ sessionId, onReset }: Props) {
     setFocused(0)
   }, [load, page])
 
+  function showToast(pair: MatchPair, decision: Decision) {
+    if (toastTimer.current) window.clearTimeout(toastTimer.current)
+    setToast({ pair, decision })
+    toastTimer.current = window.setTimeout(() => setToast(null), 7000)
+  }
+
   async function decide(p: MatchPair, decision: Decision) {
     try {
       await postDecision(sessionId, p.idx_a, p.idx_b, decision)
       // The item usually leaves the current filter; step back a page if it emptied.
-      const remaining = (data?.pairs.length ?? 1) - 1
+      // (Read through the ref — `data` from the closure can be stale during rapid
+      // keyboard review.)
+      const remaining = (dataRef.current?.pairs.length ?? 1) - 1
       if (remaining === 0 && page > 0) setPage((x) => x - 1)
       else await load(page)
+      if (decision === 'pending') setToast(null)
+      else showToast(p, decision)
     } catch (e) {
       setError((e as Error).message)
     }
   }
 
   async function decideAllInView(decision: Decision) {
-    if (!data || data.pairs.length === 0) return
+    if (!data || data.pairs.length === 0 || bulkBusy) return
     const label = decision === 'confirmed' ? 'Confirm' : 'Dismiss'
-    if (!window.confirm(`${label} all ${data.total} pair(s) in this view?`)) return
+    setBulkArming(null)
+    setBulkBusy(true)
     try {
       // The current filter's full set, not just this page: walk pages server-side by
       // sending every pair currently classified in this filter.
@@ -105,11 +123,14 @@ export function ResultsStep({ sessionId, onReset }: Props) {
         p += 1
       }
       const res = await postBulkDecisions(sessionId, all, decision)
-      setNotice(`${label}ed ${res.counts.bulk_applied ?? all.length} pairs`)
+      const applied = res.counts.bulk_applied ?? all.length
+      setNotice(`${label}ed ${applied} ${applied === 1 ? 'pair' : 'pairs'}`)
       setPage(0)
       await load(0)
     } catch (e) {
       setError((e as Error).message)
+    } finally {
+      setBulkBusy(false)
     }
   }
 
@@ -185,7 +206,7 @@ export function ResultsStep({ sessionId, onReset }: Props) {
             onError={setError}
           />
           <a className="btn btn-primary" href={downloadUrl(sessionId)}>
-            ⬇ Download CSV
+            <span aria-hidden="true">⬇</span> Download CSV
           </a>
         </div>
       </div>
@@ -193,9 +214,9 @@ export function ResultsStep({ sessionId, onReset }: Props) {
       {(c.review ?? 0) > 0 && (
         <p className="muted small review-hint">
           {c.review} pair{c.review === 1 ? '' : 's'} need review — open the <strong>Review</strong>{' '}
-          tab to confirm or dismiss each one (keyboard: <kbd>↑↓</kbd> navigate, <kbd>y</kbd>{' '}
-          confirm, <kbd>n</kbd> dismiss, <kbd>u</kbd> undo). Confirmed matches are included in the
-          downloaded dataset.
+          tab to confirm or dismiss each one (keyboard: <kbd>↑↓</kbd> or <kbd>j</kbd>/<kbd>k</kbd>{' '}
+          navigate, <kbd>y</kbd> confirm, <kbd>n</kbd> dismiss, <kbd>u</kbd> undo). Confirmed
+          matches are included in the downloaded dataset.
         </p>
       )}
 
@@ -234,6 +255,7 @@ export function ResultsStep({ sessionId, onReset }: Props) {
           <button
             key={f.key}
             className={`tab ${filter === f.key ? 'active' : ''}`}
+            aria-pressed={filter === f.key}
             onClick={() => {
               setFilter(f.key)
               setPage(0)
@@ -247,20 +269,55 @@ export function ResultsStep({ sessionId, onReset }: Props) {
 
       {filter === 'review' && (data?.total ?? 0) > 0 && (
         <div className="bulk-bar">
-          <span className="muted small">Bulk actions on all {data?.total} in this view:</span>
-          <button className="btn btn-sm btn-confirm" onClick={() => decideAllInView('confirmed')}>
-            ✓ Confirm all
-          </button>
-          <button className="btn btn-sm btn-dismiss" onClick={() => decideAllInView('dismissed')}>
-            ✕ Dismiss all
-          </button>
+          {bulkBusy ? (
+            <span className="muted small" role="status">
+              Applying to all {data?.total} {data?.total === 1 ? 'pair' : 'pairs'}…
+            </span>
+          ) : bulkArming ? (
+            <>
+              <span className="small">
+                {bulkArming === 'confirmed' ? 'Confirm' : 'Dismiss'} all {data?.total}{' '}
+                {data?.total === 1 ? 'pair' : 'pairs'} in this view?
+              </span>
+              <button
+                className={`btn btn-sm ${bulkArming === 'confirmed' ? 'btn-confirm' : 'btn-dismiss'}`}
+                onClick={() => decideAllInView(bulkArming)}
+              >
+                Yes, {bulkArming === 'confirmed' ? 'confirm' : 'dismiss'} all
+              </button>
+              <button className="btn btn-sm btn-ghost" onClick={() => setBulkArming(null)}>
+                Cancel
+              </button>
+            </>
+          ) : (
+            <>
+              <span className="muted small">Bulk actions on all {data?.total} in this view:</span>
+              <button className="btn btn-sm btn-confirm" onClick={() => setBulkArming('confirmed')}>
+                <span aria-hidden="true">✓</span> Confirm all
+              </button>
+              <button className="btn btn-sm btn-dismiss" onClick={() => setBulkArming('dismissed')}>
+                <span aria-hidden="true">✕</span> Dismiss all
+              </button>
+            </>
+          )}
         </div>
       )}
 
-      {error && <div className="error">{error}</div>}
+      {error && (
+        <div className="error" role="alert">
+          {error}
+        </div>
+      )}
       {notice && (
-        <div className="notice" onClick={() => setNotice(null)}>
+        <div className="notice" role="status">
           {notice}
+          <button
+            className="notice-close"
+            aria-label="Dismiss notice"
+            onClick={() => setNotice(null)}
+          >
+            <span aria-hidden="true">✕</span>
+          </button>
         </div>
       )}
       {data && data.pairs.length === 0 && <p className="muted">No records in this view.</p>}
@@ -268,7 +325,7 @@ export function ResultsStep({ sessionId, onReset }: Props) {
       <div className="pair-list">
         {data?.pairs.map((p, i) => (
           <PairCard
-            key={`${p.idx_a}-${p.idx_b}-${i}`}
+            key={`${p.idx_a}-${p.idx_b}`}
             pair={p}
             focused={i === focused}
             onFocus={() => setFocused(i)}
@@ -276,6 +333,31 @@ export function ResultsStep({ sessionId, onReset }: Props) {
           />
         ))}
       </div>
+
+      {toast && (
+        <div className="toast" role="status">
+          <span>
+            {toast.decision === 'confirmed' ? 'Confirmed' : 'Dismissed'}{' '}
+            <strong>
+              {toast.pair.record_a['company_name'] ??
+                Object.values(toast.pair.record_a)[0] ??
+                `row ${toast.pair.idx_a}`}
+            </strong>{' '}
+            ↔{' '}
+            <strong>
+              {toast.pair.record_b['company_name'] ??
+                Object.values(toast.pair.record_b)[0] ??
+                `row ${toast.pair.idx_b}`}
+            </strong>
+          </span>
+          <button className="btn btn-sm btn-ghost" onClick={() => decide(toast.pair, 'pending')}>
+            <span aria-hidden="true">↺</span> Undo
+          </button>
+          <button className="notice-close" aria-label="Dismiss" onClick={() => setToast(null)}>
+            <span aria-hidden="true">✕</span>
+          </button>
+        </div>
+      )}
 
       {totalPages > 1 && (
         <div className="pager">
@@ -301,7 +383,7 @@ export function ResultsStep({ sessionId, onReset }: Props) {
 
       <div className="actions">
         <button className="btn btn-ghost" onClick={onReset}>
-          ↺ Start over
+          <span aria-hidden="true">↺</span> Start over
         </button>
         <span />
       </div>
@@ -327,6 +409,8 @@ function ThresholdPanel({
   const [match, setMatch] = useState(0.9)
   const [review, setReview] = useState(0.75)
   const [busy, setBusy] = useState(false)
+  const matchSliderId = useId()
+  const reviewSliderId = useId()
 
   async function apply() {
     setBusy(true)
@@ -356,8 +440,9 @@ function ThresholdPanel({
       {open && (
         <div className="detected-body">
           <div className="slider-row">
-            <label>Match ≥ {match.toFixed(2)}</label>
+            <label htmlFor={matchSliderId}>Match ≥ {match.toFixed(2)}</label>
             <input
+              id={matchSliderId}
               type="range"
               min={0.5}
               max={1}
@@ -367,8 +452,9 @@ function ThresholdPanel({
             />
           </div>
           <div className="slider-row">
-            <label>Review ≥ {review.toFixed(2)}</label>
+            <label htmlFor={reviewSliderId}>Review ≥ {review.toFixed(2)}</label>
             <input
+              id={reviewSliderId}
               type="range"
               min={0.5}
               max={1}
@@ -411,11 +497,18 @@ function GroundTruthUpload({
       className="btn btn-ghost btn-sm"
       title="Upload a CSV of known-correct matches (columns: file_a_name, file_b_name) to measure precision/recall"
     >
-      {busy ? 'Scoring…' : '🧪 Upload ground truth'}
+      {busy ? (
+        'Scoring…'
+      ) : (
+        <>
+          <span aria-hidden="true">🧪</span> Upload ground truth
+        </>
+      )}
       <input
         type="file"
         accept=".csv,.xlsx"
-        hidden
+        className="sr-only"
+        aria-label="Upload ground truth CSV of known-correct matches (columns: file_a_name, file_b_name)"
         onChange={async (e) => {
           const f = e.target.files?.[0]
           if (!f) return
@@ -454,27 +547,53 @@ function PairCard({
   const hasA = Object.keys(pair.record_a).length > 0
   const hasB = Object.keys(pair.record_b).length > 0
   const twoSided = hasA && hasB
-  const keys = Array.from(new Set([...Object.keys(pair.record_a), ...Object.keys(pair.record_b)]))
+  // Hide fields that are empty on both sides — they carry no signal and halve
+  // how many pairs fit on screen during review.
+  const keys = Array.from(
+    new Set([...Object.keys(pair.record_a), ...Object.keys(pair.record_b)]),
+  ).filter((k) => (pair.record_a[k] ?? '').trim() !== '' || (pair.record_b[k] ?? '').trim() !== '')
   const cls = pair.match_class
   const isReview = cls === 'review'
   const isDismissed = cls === 'dismissed'
   const isConfirmed = cls === 'match' && pair.decision === 'confirmed'
   const adjustments = pair.adjustments ? pair.adjustments.split(',').filter(Boolean) : []
+  const [showDetail, setShowDetail] = useState(false)
+  const detailId = useId()
+  const cardRef = useRef<HTMLDivElement | null>(null)
+
+  // Keep the keyboard-focused card in view while j/k walking the queue.
+  useEffect(() => {
+    if (focused) cardRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [focused])
+
+  const reason = twoSided ? matchReason(pair) : null
 
   return (
-    <div className={`pair-card ${cls} ${focused ? 'focused' : ''}`} onClick={onFocus}>
+    <div ref={cardRef} className={`pair-card ${cls} ${focused ? 'focused' : ''}`} onClick={onFocus}>
       <div className="pair-meta">
         <span className={`badge ${cls}`}>{LABEL[cls] ?? cls}</span>
-        {isConfirmed && <span className="badge confirmed">✓ confirmed</span>}
-        {twoSided &&
-          (() => {
-            const r = matchReason(pair)
-            return (
-              <span className="reason" title={r.detail}>
-                <span className="reason-icon">{r.icon}</span> {r.label}
-              </span>
-            )
-          })()}
+        {isConfirmed && (
+          <span className="badge confirmed">
+            <span aria-hidden="true">✓</span> confirmed
+          </span>
+        )}
+        {reason && (
+          <button
+            className="reason"
+            aria-expanded={showDetail}
+            aria-controls={detailId}
+            title={showDetail ? undefined : 'Why did this match? Click for the explanation.'}
+            onClick={(e) => {
+              e.stopPropagation()
+              setShowDetail((v) => !v)
+            }}
+          >
+            <span className="reason-icon" aria-hidden="true">
+              {reason.icon}
+            </span>{' '}
+            {reason.label}
+          </button>
+        )}
         {adjustments.map((a) => (
           <span
             key={a}
@@ -492,23 +611,35 @@ function PairCard({
                 className="btn btn-sm btn-confirm"
                 onClick={() => onDecide(pair, 'confirmed')}
               >
-                ✓ Confirm match
+                <span aria-hidden="true">✓</span> Confirm match
               </button>
               <button
                 className="btn btn-sm btn-dismiss"
                 onClick={() => onDecide(pair, 'dismissed')}
               >
-                ✕ Dismiss
+                <span aria-hidden="true">✕</span> Dismiss
               </button>
             </>
           )}
           {(isConfirmed || isDismissed) && (
             <button className="btn btn-sm btn-ghost" onClick={() => onDecide(pair, 'pending')}>
-              ↺ Undo
+              <span aria-hidden="true">↺</span> Undo
             </button>
           )}
         </span>
       </div>
+      {reason && showDetail && (
+        <div id={detailId} className="reason-detail">
+          <p>{reason.detail}</p>
+          {adjustments.length > 0 && (
+            <ul>
+              {adjustments.map((a) => (
+                <li key={a}>{ADJ_TITLES[a] ?? a}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
       <table className="pair-table">
         <thead>
           <tr>
@@ -648,7 +779,9 @@ function EvalBox({ e, onApplySuggestion }: { e: Evaluation; onApplySuggestion?: 
   if (!e.applicable) {
     return (
       <div className="eval-box" title={e.reason ?? ''}>
-        <div className="eval-title">🧪 ground truth</div>
+        <div className="eval-title">
+          <span aria-hidden="true">🧪</span> ground truth
+        </div>
         <div className="eval-na">no overlap</div>
       </div>
     )
@@ -661,7 +794,9 @@ function EvalBox({ e, onApplySuggestion }: { e: Evaluation; onApplySuggestion?: 
       className="eval-box"
       title={`Confirmed matches scored against ${e.gt_source === 'uploaded' ? 'your uploaded ground truth' : 'ground_truth_matches.csv'}.\nF1 ${pct(e.f1)} · precision ${pct(e.precision)} · recall ${pct(e.recall)}\n${e.tp} correct, ${e.fp} false, ${e.fn} missed of ${e.ground_truth_total} known matches.`}
     >
-      <div className="eval-title">🧪 vs ground truth</div>
+      <div className="eval-title">
+        <span aria-hidden="true">🧪</span> vs ground truth
+      </div>
       <div className="eval-score">
         {pct(e.f1)} <span className="eval-metric">F1</span>
       </div>
@@ -670,9 +805,21 @@ function EvalBox({ e, onApplySuggestion }: { e: Evaluation; onApplySuggestion?: 
         <span>R {pct(e.recall)}</span>
       </div>
       <div className="eval-counts">
-        <span className="ok">✓{e.tp}</span>
-        <span className="bad">✗{e.fp}</span>
-        <span className="miss">⌀{e.fn}</span>
+        <span className="ok">
+          <span aria-hidden="true">✓</span>
+          {e.tp}
+          <span className="sr-only"> correct</span>
+        </span>
+        <span className="bad">
+          <span aria-hidden="true">✗</span>
+          {e.fp}
+          <span className="sr-only"> false positives</span>
+        </span>
+        <span className="miss">
+          <span aria-hidden="true">⌀</span>
+          {e.fn}
+          <span className="sr-only"> missed of {e.ground_truth_total} known matches</span>
+        </span>
       </div>
       {suggestionBeatsCurrent && onApplySuggestion && (
         <button
@@ -714,7 +861,8 @@ function ReconcileRow({
         <span className="reconcile-title">{title}</span>
         <span className="reconcile-total">{t.toLocaleString()} rows</span>
       </div>
-      <div className="reconcile-bar">
+      {/* Decorative — the legend below carries the same numbers as text. */}
+      <div className="reconcile-bar" aria-hidden="true">
         {segments.map((s) => {
           const v = s.value ?? 0
           const pct = t > 0 ? (v / t) * 100 : 0

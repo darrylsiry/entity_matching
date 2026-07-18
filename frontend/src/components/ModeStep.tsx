@@ -36,7 +36,9 @@ export function ModeStep({ mode, onChoose }: Props) {
             className={`mode-card ${mode === o.mode ? 'selected' : ''}`}
             onClick={() => onChoose(o.mode)}
           >
-            <div className="mode-icon">{o.icon}</div>
+            <div className="mode-icon" aria-hidden="true">
+              {o.icon}
+            </div>
             <div className="mode-title">{o.title}</div>
             <div className="muted mode-desc">{o.desc}</div>
             <div className="mode-out">{o.out}</div>
