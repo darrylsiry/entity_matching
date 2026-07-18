@@ -1,16 +1,63 @@
+/* Design tokens — the landing page's identity, carried through the whole app.
+   Light "cool paper" ground with a cobalt accent by default; the dark theme
+   re-derives every token under prefers-color-scheme. Components style through
+   tokens only — no raw colors outside this file. */
+
 :root {
-  --bg: #0f1220;
-  --panel: #171a2b;
-  --panel-2: #1e2236;
-  --border: #2a2f48;
-  --text: #e6e8f0;
-  --muted: #9aa0b8;
-  --primary: #6366f1;
-  --primary-hover: #4f52d6;
-  --match: #22c55e;
-  --review: #f59e0b;
-  --danger: #ef4444;
-  color-scheme: dark;
+  color-scheme: light dark;
+
+  /* type roles: condensed display for headlines/buttons, bookish serif for
+     running text, mono for record data and provenance */
+  --display:
+    'Avenir Next Condensed', 'Helvetica Neue Condensed', 'Arial Narrow', 'Roboto Condensed',
+    'Liberation Sans Narrow', system-ui, sans-serif;
+  --body-font: Charter, 'Bitstream Charter', Georgia, Cambria, 'Times New Roman', serif;
+  --mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+
+  /* light theme (default) */
+  --bg: #f7f8fa;
+  --panel: #ffffff;
+  --panel-2: #eef1f6;
+  --border: #d8dde6;
+  --text: #16202e;
+  --muted: #5a6678;
+  --primary: #2049c7;
+  --primary-hover: #1a3ca6;
+  --primary-contrast: #ffffff;
+  --primary-soft: rgba(32, 73, 199, 0.1);
+  --match: #1e8a4c;
+  --match-soft: rgba(30, 138, 76, 0.12);
+  --review: #b87710;
+  --review-soft: rgba(184, 119, 16, 0.13);
+  --danger: #c22f2f;
+  --danger-soft: rgba(194, 47, 47, 0.1);
+  --muted-soft: rgba(90, 102, 120, 0.14);
+  --diff: #9a6700;
+  --panel-shadow: 0 1px 2px rgba(16, 32, 46, 0.04), 0 8px 24px rgba(16, 32, 46, 0.05);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f141d;
+    --panel: #161d29;
+    --panel-2: #1d2635;
+    --border: #263040;
+    --text: #e8ecf3;
+    --muted: #8b95a7;
+    --primary: #7c9dff;
+    --primary-hover: #94aeff;
+    --primary-contrast: #0f141d;
+    --primary-soft: rgba(124, 157, 255, 0.14);
+    --match: #4cc97e;
+    --match-soft: rgba(76, 201, 126, 0.14);
+    --review: #e0a33e;
+    --review-soft: rgba(224, 163, 62, 0.15);
+    --danger: #ef6a5a;
+    --danger-soft: rgba(239, 106, 90, 0.13);
+    --muted-soft: rgba(139, 149, 167, 0.16);
+    --diff: #e0a33e;
+    --panel-shadow: none;
+  }
 }
 
 * {
@@ -28,7 +75,14 @@ body,
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  font-size: 15px;
-  line-height: 1.5;
+  font-family: var(--body-font);
+  font-size: 15.5px;
+  line-height: 1.55;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--display);
+  letter-spacing: 0.005em;
 }

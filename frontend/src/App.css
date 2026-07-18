@@ -6,8 +6,8 @@
 
 .app-header h1 {
   margin: 0 0 4px;
-  font-size: 28px;
-  letter-spacing: -0.02em;
+  font-size: 30px;
+  letter-spacing: 0.005em;
 }
 .app-header p {
   margin: 0;
@@ -53,7 +53,7 @@
 }
 .step.active .dot {
   background: var(--primary);
-  color: white;
+  color: var(--primary-contrast);
   border-color: var(--primary);
 }
 .step.done .dot {
@@ -68,6 +68,7 @@
   border: 1px solid var(--border);
   border-radius: 16px;
   padding: 28px;
+  box-shadow: var(--panel-shadow);
 }
 .panel h2 {
   margin: 0 0 6px;
@@ -87,7 +88,9 @@
 /* buttons */
 .btn {
   font: inherit;
+  font-family: var(--display);
   font-weight: 600;
+  letter-spacing: 0.015em;
   border-radius: 10px;
   padding: 10px 16px;
   border: 1px solid var(--border);
@@ -113,7 +116,7 @@
 .btn-primary {
   background: var(--primary);
   border-color: var(--primary);
-  color: white;
+  color: var(--primary-contrast);
 }
 .btn-primary:hover:not(:disabled) {
   background: var(--primary-hover);
@@ -163,8 +166,8 @@
 
 .error {
   color: var(--danger);
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid rgba(239, 68, 68, 0.3);
+  background: var(--danger-soft);
+  border: 1px solid var(--danger);
   padding: 8px 12px;
   border-radius: 8px;
   margin-top: 12px;
@@ -370,7 +373,7 @@ select {
 }
 .progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--primary), #8b8ef7);
+  background: var(--primary);
   transition: width 0.4s ease;
 }
 .progress-label {
@@ -394,8 +397,10 @@ select {
   text-align: center;
 }
 .count-value {
-  font-size: 26px;
+  font-family: var(--display);
+  font-size: 28px;
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 .count-label {
   color: var(--muted);
@@ -431,14 +436,17 @@ select {
   line-height: 1.25;
 }
 .eval-title {
+  font-family: var(--mono);
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--muted);
 }
 .eval-score {
+  font-family: var(--display);
   font-size: 20px;
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 .eval-metric {
   font-size: 11px;
@@ -485,8 +493,10 @@ select {
   flex-direction: column;
 }
 .chip-value {
-  font-size: 22px;
+  font-family: var(--display);
+  font-size: 24px;
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 .chip-label {
   color: var(--muted);
@@ -554,37 +564,38 @@ select {
   margin-bottom: 10px;
 }
 .badge {
+  font-family: var(--mono);
   text-transform: uppercase;
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   padding: 3px 8px;
   border-radius: 6px;
 }
 .badge.match {
-  background: rgba(34, 197, 94, 0.15);
+  background: var(--match-soft);
   color: var(--match);
 }
 .badge.review {
-  background: rgba(245, 158, 11, 0.15);
+  background: var(--review-soft);
   color: var(--review);
 }
 .badge.unique_a,
 .badge.unique_b {
-  background: rgba(154, 160, 184, 0.18);
+  background: var(--muted-soft);
   color: var(--muted);
 }
 .badge.master {
-  background: rgba(99, 102, 241, 0.18);
-  color: #a5a8f5;
+  background: var(--primary-soft);
+  color: var(--primary);
 }
 .badge.dismissed {
-  background: rgba(154, 160, 184, 0.18);
+  background: var(--muted-soft);
   color: var(--muted);
   text-decoration: line-through;
 }
 .badge.confirmed {
-  background: rgba(34, 197, 94, 0.15);
+  background: var(--match-soft);
   color: var(--match);
 }
 .pair-card.dismissed {
@@ -599,24 +610,24 @@ select {
   gap: 8px;
 }
 .btn-confirm {
-  background: rgba(34, 197, 94, 0.15);
-  border-color: rgba(34, 197, 94, 0.4);
+  background: var(--match-soft);
+  border-color: var(--match);
   color: var(--match);
 }
 .btn-confirm:hover {
-  background: rgba(34, 197, 94, 0.25);
+  background: color-mix(in srgb, var(--match) 24%, transparent);
 }
 .btn-dismiss {
-  background: rgba(239, 68, 68, 0.12);
-  border-color: rgba(239, 68, 68, 0.35);
-  color: #f87171;
+  background: var(--danger-soft);
+  border-color: var(--danger);
+  color: var(--danger);
 }
 .btn-dismiss:hover {
-  background: rgba(239, 68, 68, 0.22);
+  background: color-mix(in srgb, var(--danger) 22%, transparent);
 }
 .review-hint {
-  background: rgba(245, 158, 11, 0.1);
-  border: 1px solid rgba(245, 158, 11, 0.3);
+  background: var(--review-soft);
+  border: 1px solid var(--review);
   border-radius: 8px;
   padding: 8px 12px;
 }
@@ -724,7 +735,7 @@ select {
   margin-bottom: 18px;
   border: 1px solid var(--primary);
   border-radius: 10px;
-  background: rgba(99, 102, 241, 0.08);
+  background: var(--primary-soft);
 }
 
 /* registration-id type select (column mapping) */
@@ -762,8 +773,8 @@ select {
 /* transient success notice */
 .notice {
   color: var(--match);
-  background: rgba(34, 197, 94, 0.1);
-  border: 1px solid rgba(34, 197, 94, 0.3);
+  background: var(--match-soft);
+  border: 1px solid var(--match);
   padding: 8px 12px;
   border-radius: 8px;
   margin-top: 12px;
@@ -774,6 +785,7 @@ select {
 
 /* corroboration provenance chips */
 .adj-chip {
+  font-family: var(--mono);
   font-size: 11px;
   font-weight: 700;
   padding: 2px 7px;
@@ -781,12 +793,12 @@ select {
   letter-spacing: 0.02em;
 }
 .adj-chip.good {
-  background: rgba(34, 197, 94, 0.12);
+  background: var(--match-soft);
   color: var(--match);
 }
 .adj-chip.bad {
-  background: rgba(239, 68, 68, 0.12);
-  color: #f87171;
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 
 /* keyboard-focused pair card */
@@ -801,7 +813,7 @@ kbd {
   border-radius: 4px;
   padding: 0 5px;
   font-size: 12px;
-  font-family: inherit;
+  font-family: var(--mono);
 }
 
 .eval-suggest {
@@ -822,11 +834,14 @@ kbd {
   max-width: 520px;
 }
 .score {
+  font-family: var(--mono);
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 .stage-tag {
+  font-family: var(--mono);
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
   margin-left: auto;
 }
 .reason {
@@ -867,7 +882,7 @@ kbd {
   width: 22%;
 }
 .pair-table tr.diff td:not(.k) {
-  color: #fbbf24;
+  color: var(--diff);
 }
 
 .pager {

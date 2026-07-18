@@ -1,14 +1,13 @@
-/* Landing page — native to the app's dark palette (tokens from index.css), with
-   its own type voice: condensed display for headlines, mono for record data. */
+/* Landing page — same token system as the rest of the app (index.css), which
+   carries the landing's original identity: cool paper + cobalt in light, deep
+   navy in dark. Aliased here so the rules below read naturally. */
 
 .landing {
-  --ld-display:
-    'Avenir Next Condensed', 'Helvetica Neue Condensed', 'Arial Narrow', 'Roboto Condensed',
-    'Liberation Sans Narrow', system-ui, sans-serif;
-  --ld-mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
-  --ld-primary-soft: rgba(99, 102, 241, 0.14);
-  --ld-match-soft: rgba(34, 197, 94, 0.14);
-  --ld-review-soft: rgba(245, 158, 11, 0.14);
+  --ld-display: var(--display);
+  --ld-mono: var(--mono);
+  --ld-primary-soft: var(--primary-soft);
+  --ld-match-soft: var(--match-soft);
+  --ld-review-soft: var(--review-soft);
   max-width: 1040px;
   margin: 0 auto;
   padding: 0 24px 64px;
@@ -60,7 +59,7 @@
 }
 .ld-chip-tool {
   background: var(--ld-primary-soft);
-  color: #a5a8ff;
+  color: var(--primary);
 }
 .ld-chip-adj {
   border: 1px solid var(--border);
@@ -82,7 +81,7 @@
 }
 .ld-btn-solid {
   background: var(--primary);
-  color: #fff;
+  color: var(--primary-contrast);
 }
 .ld-btn-solid:hover,
 .ld-btn-solid:focus-visible {
@@ -148,7 +147,7 @@
 .ld-variants {
   display: block;
   margin-top: 10px;
-  font-family: Georgia, 'Times New Roman', serif;
+  font-family: var(--body-font);
   font-style: italic;
   font-weight: 400;
   font-size: 0.62em;
@@ -179,6 +178,7 @@
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 20px 20px 16px;
+  box-shadow: var(--panel-shadow);
 }
 .ld-demo-head {
   display: flex;
