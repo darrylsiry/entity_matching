@@ -481,6 +481,35 @@ def test_pipeline_passes_lowered_floor_to_fuzzy(monkeypatch):
     assert seen["threshold"] == 0.6
 
 
+def test_score_histogram_bins_by_stage(monkeypatch):
+    import app.storage as storage
+    from app import service
+
+    allpairs = pd.DataFrame(
+        {
+            "idx_a": [0, 1, 2, 3],
+            "idx_b": [0, 1, 2, 3],
+            "score": [0.99, 0.86, 0.72, 0.40],  # 0.40 clamps into the first bin
+            "stage": ["deterministic", "fuzzy", "fuzzy", "probabilistic"],
+            "rule": ["domain", "name_token_set", "name_token_set", "splink"],
+            "adjustments": ["", "", "", ""],
+        }
+    )
+    meta = {"request": {"config": {"thresholds": {"match": 0.9, "review": 0.75}}}}
+    monkeypatch.setattr(storage, "load_allpairs", lambda sid: allpairs)
+    monkeypatch.setattr(storage, "load_session_meta", lambda sid: meta)
+
+    out = service.score_histogram("s")
+    assert out["total"] == 4
+    assert out["stages"] == ["deterministic", "probabilistic", "fuzzy"]  # cascade order
+    assert out["thresholds"] == {"match": 0.9, "review": 0.75}
+    assert sum(sum(b["counts"].values()) for b in out["bins"]) == 4  # nothing lost
+    # 0.99 lands in the last bin (inclusive upper edge region)
+    assert out["bins"][-1]["counts"]["deterministic"] == 1
+    # the clamped 0.40 probabilistic score sits in the first bin
+    assert out["bins"][0]["counts"]["probabilistic"] == 1
+
+
 # ---- scoring ---------------------------------------------------------------
 
 def test_classification_bands():
