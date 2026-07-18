@@ -26,7 +26,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from . import cluster, deterministic, fuzzy, probabilistic
+from . import cluster, deterministic, embedding, fuzzy, probabilistic
 from .normalize import normalize_frame
 from .pipeline import MatchConfig, ProgressCb
 from .schema import CanonicalField
@@ -71,7 +71,11 @@ def run_dedupe(
     n = int(len(raw))
 
     progress("Normalizing records", 0.05)
-    norm = normalize_frame(raw, mapping, phone_region=config.default_phone_region)
+    norm = normalize_frame(
+        raw, mapping,
+        phone_region=config.default_phone_region,
+        use_libpostal=config.use_libpostal,
+    )
 
     links: list[pd.DataFrame] = []
     resolved: set[int] = set()  # rows already linked deterministically (strong signal)
@@ -119,6 +123,21 @@ def run_dedupe(
         )
         if not fz.empty:
             links.append(fz)
+
+    if config.use_embedding:
+        progress("Semantic matching (embeddings)", 0.85)
+        # Residual rows only — no link from any earlier stage touches them.
+        seen = set(resolved)
+        for f in links:
+            seen |= set(f["idx_a"].tolist()) | set(f["idx_b"].tolist())
+        emb = embedding.match_embedding_within(
+            norm,
+            threshold=config.embedding_threshold,
+            exclude=seen,
+            model_name=config.embedding_model,
+        )
+        if not emb.empty:
+            links.append(emb)
 
     progress("Clustering into master IDs", 0.9)
     all_links = (

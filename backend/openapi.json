@@ -771,6 +771,16 @@
             "title": "Deterministic Name Floor",
             "type": "number"
           },
+          "embedding_model": {
+            "default": "all-MiniLM-L6-v2",
+            "title": "Embedding Model",
+            "type": "string"
+          },
+          "embedding_threshold": {
+            "default": 0.85,
+            "title": "Embedding Threshold",
+            "type": "number"
+          },
           "fuzzy_threshold": {
             "default": 0.8,
             "title": "Fuzzy Threshold",
@@ -808,9 +818,19 @@
             "title": "Use Deterministic",
             "type": "boolean"
           },
+          "use_embedding": {
+            "default": false,
+            "title": "Use Embedding",
+            "type": "boolean"
+          },
           "use_fuzzy": {
             "default": true,
             "title": "Use Fuzzy",
+            "type": "boolean"
+          },
+          "use_libpostal": {
+            "default": true,
+            "title": "Use Libpostal",
             "type": "boolean"
           },
           "use_phone": {

@@ -11,6 +11,7 @@ DataFrame.
 from __future__ import annotations
 
 import functools
+import logging
 import re
 
 import pandas as pd
@@ -20,6 +21,8 @@ from cleanco import basename
 from unidecode import unidecode
 
 from .schema import (
+    NORM_ADDR_HOUSE_NUMBER,
+    NORM_ADDR_ROAD,
     NORM_DOMAIN,
     NORM_FIRST_METAPHONE,
     NORM_NAME_METAPHONE,
@@ -27,6 +30,8 @@ from .schema import (
     CanonicalField,
     norm_col,
 )
+
+logger = logging.getLogger(__name__)
 
 # ══════════════════════════════════════════════════════════════════════════
 # SECTION: Module setup — shared regexes, offline TLD parser, abbreviation table
@@ -270,6 +275,87 @@ def normalize_postcode(value: object) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# SECTION: Street addresses — libpostal parsing with a static-expansion fallback
+# With libpostal installed, addresses are parsed into components (house number,
+# road, city, ...) so "123 Main St Ste 4" and "123 Main Street Suite 4" compare
+# on equal terms. Without it, a token-wise abbreviation table gives most of the
+# same benefit on the whole string. libpostal needs a ~2 GB C-library install,
+# so it is strictly optional; which mode is active is logged once.
+# ══════════════════════════════════════════════════════════════════════════
+
+# Fallback expansions applied token-wise to the normalized address. Ambiguity
+# ("St Louis" -> "street louis") is acceptable: both sides of a comparison get the
+# identical treatment, so equal inputs stay equal.
+_ADDR_ABBREVIATIONS = {
+    "st": "street", "ave": "avenue", "av": "avenue", "rd": "road",
+    "blvd": "boulevard", "dr": "drive", "ln": "lane", "ct": "court",
+    "pl": "place", "sq": "square", "pkwy": "parkway", "hwy": "highway",
+    "ste": "suite", "fl": "floor", "apt": "apartment", "bldg": "building",
+    "rm": "room", "n": "north", "s": "south", "e": "east", "w": "west",
+    "ne": "northeast", "nw": "northwest", "se": "southeast", "sw": "southwest",
+}
+
+# libpostal labels we keep from parse_address (its full label set is much larger).
+_ADDR_PARSE_LABELS = frozenset(
+    {"house_number", "road", "unit", "city", "state", "postcode"}
+)
+
+
+def expand_address(normalized_address: str) -> str:
+    """Token-wise abbreviation expansion — the no-libpostal fallback."""
+    if not normalized_address:
+        return ""
+    return " ".join(
+        _ADDR_ABBREVIATIONS.get(t, t) for t in normalized_address.split()
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _libpostal():
+    """(parser, expand) modules when libpostal is installed, else None. Logs once."""
+    try:
+        from postal import expand as lp_expand
+        from postal import parser as lp_parser
+
+        logger.info("libpostal available: structured address parsing enabled")
+        return lp_parser, lp_expand
+    except Exception:
+        logger.info(
+            "libpostal not installed: using static address abbreviation expansion"
+        )
+        return None
+
+
+def parse_address(value: object) -> dict[str, str]:
+    """Parse an address into components via libpostal; {} when unavailable/empty.
+
+    Keys (present only when parsed): house_number, road, unit, city, state,
+    postcode. The road is run through libpostal's expand_address (first expansion
+    kept) so "Main St" and "Main Street" unify.
+    """
+    lp = _libpostal()
+    if lp is None:
+        return {}
+    lp_parser, lp_expand = lp
+    text = _base(value)
+    if not text:
+        return {}
+    try:
+        parts: dict[str, str] = {}
+        for component, label in lp_parser.parse_address(text):
+            if label in _ADDR_PARSE_LABELS:
+                parts.setdefault(label, component)
+        road = parts.get("road", "")
+        if road:
+            expansions = lp_expand.expand_address(road)
+            if expansions:
+                parts["road"] = expansions[0]
+        return parts
+    except Exception:  # a single unparseable value must never kill the stage
+        return {}
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # SECTION: Phone numbers — parse to E.164 with placeholder guards
 # A shared phone is a strong identifier (like a domain), so invalid or
 # placeholder values must become "" rather than false 0.99 matches.
@@ -352,6 +438,7 @@ def normalize_frame(
     df: pd.DataFrame,
     mapping: dict[CanonicalField, str],
     phone_region: str = "US",
+    use_libpostal: bool = True,
 ) -> pd.DataFrame:
     """Add `norm_*` columns to a copy of `df` based on the canonical->source mapping.
 
@@ -384,6 +471,37 @@ def normalize_frame(
         )
     else:
         out[phone_target] = ""
+
+    # Street address (spec 2.1): with libpostal, derive structured components and
+    # backfill any UNMAPPED city/state/postcode from the parse (mapped columns are
+    # never overwritten); without it, expand abbreviations in the whole string so
+    # "Main St Ste 4" == "Main Street Suite 4".
+    out[NORM_ADDR_HOUSE_NUMBER] = ""
+    out[NORM_ADDR_ROAD] = ""
+    addr_src = mapping.get(CanonicalField.ADDRESS)
+    if use_libpostal and addr_src is not None and addr_src in out.columns:
+        if _libpostal() is not None:
+            parsed = out[addr_src].map(parse_address)
+            out[NORM_ADDR_HOUSE_NUMBER] = parsed.map(
+                lambda p: normalize_generic(p.get("house_number", ""))
+            )
+            out[NORM_ADDR_ROAD] = parsed.map(
+                lambda p: normalize_generic(p.get("road", ""))
+            )
+            backfills = (
+                (CanonicalField.CITY, "city", normalize_generic),
+                (CanonicalField.STATE, "state", normalize_state),
+                (CanonicalField.POSTCODE, "postcode", normalize_postcode),
+            )
+            for fld, label, normalizer in backfills:
+                src = mapping.get(fld)
+                if src is None or src not in out.columns:
+                    out[norm_col(fld)] = parsed.map(
+                        lambda p, lb=label, nz=normalizer: nz(p.get(lb, ""))
+                    )
+        else:
+            addr_col = norm_col(CanonicalField.ADDRESS)
+            out[addr_col] = out[addr_col].map(expand_address)
 
     name_norm = out[norm_col(CanonicalField.NAME)]
     out[NORM_NAME_TOKENS] = name_norm.map(name_tokens)

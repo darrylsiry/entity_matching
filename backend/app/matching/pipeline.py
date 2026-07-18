@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
-from . import deterministic, fuzzy, probabilistic
+from . import deterministic, embedding, fuzzy, probabilistic
 from .normalize import normalize_frame
 from .schema import CanonicalField
 from .scoring import (
@@ -66,6 +66,16 @@ class MatchConfig:
     stage_thresholds: dict[str, tuple[float | None, float | None]] | None = None
     registration_id_type_a: str = "unknown"
     registration_id_type_b: str = "unknown"
+    # --- matching-improvements spec, Phase 2.1 ---
+    # libpostal address parsing; auto-falls back to a static abbreviation-expansion
+    # table when the library is not installed.
+    use_libpostal: bool = True
+    # --- matching-improvements spec, Phase 2.2 ---
+    # Semantic (embedding) stage on post-fuzzy residuals. Off by default; candidates
+    # are capped at the review band unless city/postcode corroborates.
+    use_embedding: bool = False
+    embedding_threshold: float = 0.85
+    embedding_model: str = embedding.DEFAULT_MODEL
 
 
 @dataclass
@@ -114,8 +124,16 @@ def run_pipeline(
     progress = progress or _noop
 
     progress("Normalizing records", 0.05)
-    norm_a = normalize_frame(raw_a, mapping_a, phone_region=config.default_phone_region)
-    norm_b = normalize_frame(raw_b, mapping_b, phone_region=config.default_phone_region)
+    norm_a = normalize_frame(
+        raw_a, mapping_a,
+        phone_region=config.default_phone_region,
+        use_libpostal=config.use_libpostal,
+    )
+    norm_b = normalize_frame(
+        raw_b, mapping_b,
+        phone_region=config.default_phone_region,
+        use_libpostal=config.use_libpostal,
+    )
 
     all_pairs: list[pd.DataFrame] = []
     resolved_a: set[int] = set()  # A indices confidently matched, excluded downstream
@@ -175,6 +193,25 @@ def run_pipeline(
         )
         if not fz.empty:
             all_pairs.append(fz)
+
+    if config.use_embedding:
+        progress("Semantic matching (embeddings)", 0.85)
+        # Residuals only: records that appear in NO pair from any earlier stage —
+        # this stage can only surface candidates nothing else found.
+        seen_a, seen_b = set(resolved_a), set(resolved_b)
+        for p in all_pairs:
+            seen_a |= set(p["idx_a"].tolist())
+            seen_b |= set(p["idx_b"].tolist())
+        emb = embedding.match_embedding(
+            norm_a,
+            norm_b,
+            threshold=config.embedding_threshold,
+            exclude_a=seen_a,
+            exclude_b=seen_b,
+            model_name=config.embedding_model,
+        )
+        if not emb.empty:
+            all_pairs.append(emb)
 
     progress("Scoring and classifying", 0.9)
     combined = (

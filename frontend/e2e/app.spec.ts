@@ -13,6 +13,11 @@ const SAMPLE = path.resolve(__dirname, '../../sample_data')
 test.describe('two-file matching', () => {
   test('full link flow: upload → map → run → review → decide', async ({ page }) => {
     await page.goto('/')
+    // the marketing landing shows first; enter the wizard
+    await page
+      .getByRole('button', { name: /get started/i })
+      .first()
+      .click()
     await page.getByText('Compare two files').click()
 
     // one-click bundled test data into both dropzones
@@ -43,7 +48,10 @@ test.describe('two-file matching', () => {
     await reviewTab.click()
     const reviewCards = page.locator('.pair-card.review')
     if ((await reviewCards.count()) > 0) {
-      await reviewCards.first().getByRole('button', { name: /Confirm match/i }).click()
+      await reviewCards
+        .first()
+        .getByRole('button', { name: /Confirm match/i })
+        .click()
       await expect(page.locator('.pair-card.review').first()).not.toBeVisible({
         timeout: 10_000,
       })
@@ -59,6 +67,10 @@ test.describe('two-file matching', () => {
 test.describe('single-file dedupe', () => {
   test('dedupe flow: upload → run → clusters + possible duplicates', async ({ page }) => {
     await page.goto('/')
+    await page
+      .getByRole('button', { name: /get started/i })
+      .first()
+      .click()
     await page.getByText('Deduplicate one file').click()
 
     await page

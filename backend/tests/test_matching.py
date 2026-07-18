@@ -5,7 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from app.matching import cluster, deterministic, fuzzy, normalize
+from app.matching import cluster, deterministic, embedding, fuzzy, normalize
 from app.matching.dedupe import run_dedupe
 from app.matching.pipeline import MatchConfig, run_pipeline
 from app.matching.schema import CanonicalField, norm_col
@@ -128,6 +128,172 @@ def test_phonetic_blocking_catches_first_char_typos():
     assert len(with_phonetic) == 1
     without = fuzzy.match_fuzzy(a, b, threshold=0.8, phonetic=False)
     assert without.empty  # prefix-only blocking misses it ("jons" != "john")
+
+
+# ---- address parsing (spec 2.1) --------------------------------------------
+
+
+def test_address_expansion_fallback(monkeypatch):
+    # Without libpostal, token-wise abbreviation expansion makes the variants equal.
+    monkeypatch.setattr(normalize, "_libpostal", lambda: None)
+    mapping = {CanonicalField.NAME: "name", CanonicalField.ADDRESS: "addr"}
+    a = normalize.normalize_frame(
+        pd.DataFrame([{"name": "Acme", "addr": "123 Main St, Ste 4"}]), mapping
+    )
+    b = normalize.normalize_frame(
+        pd.DataFrame([{"name": "Acme", "addr": "123 Main Street Suite 4"}]), mapping
+    )
+    addr = norm_col(CanonicalField.ADDRESS)
+    assert a.loc[0, addr] == b.loc[0, addr] == "123 main street suite 4"
+    # parsed component columns exist but stay empty in fallback mode
+    assert a.loc[0, normalize.NORM_ADDR_ROAD] == ""
+    assert a.loc[0, normalize.NORM_ADDR_HOUSE_NUMBER] == ""
+
+
+def test_use_libpostal_off_keeps_old_behavior():
+    mapping = {CanonicalField.ADDRESS: "addr"}
+    df = pd.DataFrame([{"addr": "123 Main St"}])
+    out = normalize.normalize_frame(df, mapping, use_libpostal=False)
+    assert out.loc[0, norm_col(CanonicalField.ADDRESS)] == "123 main st"
+
+
+class _StubLibpostalParser:
+    @staticmethod
+    def parse_address(text):
+        return [
+            ("123", "house_number"), ("main st", "road"), ("ste 4", "unit"),
+            ("springfield", "city"), ("illinois", "state"), ("62701", "postcode"),
+        ]
+
+
+class _StubLibpostalExpand:
+    @staticmethod
+    def expand_address(text):
+        return ["main street"]
+
+
+def test_parse_address_and_backfill_with_stub_libpostal(monkeypatch):
+    monkeypatch.setattr(
+        normalize, "_libpostal",
+        lambda: (_StubLibpostalParser, _StubLibpostalExpand),
+    )
+    # city IS mapped -> never overwritten; state/postcode unmapped -> backfilled.
+    mapping = {
+        CanonicalField.NAME: "name",
+        CanonicalField.ADDRESS: "addr",
+        CanonicalField.CITY: "city",
+    }
+    df = pd.DataFrame(
+        [{"name": "Acme", "addr": "123 Main St Ste 4 Springfield IL 62701",
+          "city": "Chicago"}]
+    )
+    out = normalize.normalize_frame(df, mapping)
+    assert out.loc[0, normalize.NORM_ADDR_HOUSE_NUMBER] == "123"
+    assert out.loc[0, normalize.NORM_ADDR_ROAD] == "main street"  # libpostal-expanded
+    assert out.loc[0, norm_col(CanonicalField.CITY)] == "chicago"  # mapped column wins
+    assert out.loc[0, norm_col(CanonicalField.STATE)] == "il"      # backfilled + normalized
+    assert out.loc[0, norm_col(CanonicalField.POSTCODE)] == "62701"
+
+
+def test_fuzzy_corroboration_prefers_parsed_address():
+    # Raw address strings conflict (unit/PO-box noise) but the parsed house+road
+    # agree — with parsed components the adjustment flips from conflict to agree.
+    addr = norm_col(CanonicalField.ADDRESS)
+    a = pd.Series({addr: "po box 99", normalize.NORM_ADDR_HOUSE_NUMBER: "123",
+                   normalize.NORM_ADDR_ROAD: "main street"})
+    b = pd.Series({addr: "suite 12 tower plaza", normalize.NORM_ADDR_HOUSE_NUMBER: "123",
+                   normalize.NORM_ADDR_ROAD: "main street"})
+    _, adj_raw = fuzzy.corroborate(0.90, a, b, {"addr": True, "addr_parsed": False})
+    assert adj_raw == ["addr_conflict"]
+    _, adj_parsed = fuzzy.corroborate(0.90, a, b, {"addr": True, "addr_parsed": True})
+    assert adj_parsed == ["addr_agree"]
+
+
+# ---- embedding stage (spec 2.2) --------------------------------------------
+
+
+class _StubEmbedModel:
+    """Deterministic stand-in for a SentenceTransformer: 'ibm'-flavored texts map
+    to one unit vector, everything else to an orthogonal one."""
+
+    @staticmethod
+    def encode(texts, normalize_embeddings=True, show_progress_bar=False):
+        import numpy as np
+
+        def vec(text: str):
+            name = text.split(",")[0]
+            if "ibm" in name or "international business machines" in name:
+                return [1.0, 0.0]
+            return [0.0, 1.0]
+
+        return np.array([vec(t) for t in texts], dtype="float32")
+
+
+def _stub_model(monkeypatch):
+    monkeypatch.setattr(embedding, "_load_model", lambda name: _StubEmbedModel())
+
+
+def test_embedding_finds_acronym_but_caps_at_review(monkeypatch):
+    _stub_model(monkeypatch)
+    mapping = {CanonicalField.NAME: "name"}
+    a = _frame([{"name": "IBM"}], mapping)
+    b = _frame([{"name": "International Business Machines"}], mapping)
+    pairs = embedding.match_embedding(a, b, threshold=0.85)
+    assert len(pairs) == 1
+    row = pairs.iloc[0]
+    assert row["stage"] == "embedding" and row["rule"] == "semantic_cosine"
+    # cosine is 1.0 but with no corroboration the score is capped below match
+    assert row["score"] == 0.89
+
+
+def test_embedding_uncapped_when_city_agrees(monkeypatch):
+    _stub_model(monkeypatch)
+    mapping = {CanonicalField.NAME: "name", CanonicalField.CITY: "city"}
+    a = _frame([{"name": "IBM", "city": "Armonk"}], mapping)
+    b = _frame([{"name": "International Business Machines", "city": "Armonk"}], mapping)
+    pairs = embedding.match_embedding(a, b, threshold=0.85)
+    assert len(pairs) == 1
+    row = pairs.iloc[0]
+    assert row["score"] >= 0.90  # cap lifted; can auto-match
+    assert "same_city" in row["adjustments"]
+
+
+def test_embedding_skips_when_model_unavailable(monkeypatch):
+    monkeypatch.setattr(embedding, "_load_model", lambda name: None)
+    mapping = {CanonicalField.NAME: "name"}
+    a = _frame([{"name": "IBM"}], mapping)
+    b = _frame([{"name": "International Business Machines"}], mapping)
+    assert embedding.match_embedding(a, b).empty
+
+
+def test_embedding_within_file(monkeypatch):
+    _stub_model(monkeypatch)
+    mapping = {CanonicalField.NAME: "name"}
+    frame = _frame(
+        [{"name": "IBM Corp"}, {"name": "International Business Machines"},
+         {"name": "Zeta Plumbing"}],
+        mapping,
+    )
+    pairs = embedding.match_embedding_within(frame, threshold=0.85)
+    assert len(pairs) == 1
+    assert {int(pairs.iloc[0]["idx_a"]), int(pairs.iloc[0]["idx_b"])} == {0, 1}
+
+
+def test_pipeline_embedding_runs_on_residuals_only(monkeypatch):
+    _stub_model(monkeypatch)
+    mapping = {CanonicalField.NAME: "name"}
+    raw_a = pd.DataFrame([{"name": "Acme Inc"}, {"name": "IBM"}])
+    raw_b = pd.DataFrame([{"name": "Acme Incorporated"},
+                          {"name": "International Business Machines"}])
+    config = MatchConfig(use_probabilistic=False, use_embedding=True)
+    result = run_pipeline(raw_a, raw_b, mapping, mapping, config)
+    by_stage = result.pairs.set_index("stage")
+    # Acme resolves in the fuzzy stage; only the IBM residual reaches embeddings,
+    # where it lands in review (capped), never auto-match.
+    assert by_stage.loc["fuzzy", "match_class"] == MATCH
+    assert by_stage.loc["embedding", "match_class"] == REVIEW
+    # reconciliation invariant holds with the new stage in play
+    assert result.counts[MATCH] + result.counts[REVIEW] + result.counts["unique_a"] == 2
 
 
 def test_csv_sanitize_neutralizes_formula_injection():

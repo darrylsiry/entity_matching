@@ -52,6 +52,10 @@ def _to_match_config(req: CreateSessionRequest) -> MatchConfig:
         stage_thresholds=stage_thresholds,
         registration_id_type_a=req.registration_id_type_a,
         registration_id_type_b=req.registration_id_type_b,
+        use_libpostal=cfg.use_libpostal,
+        use_embedding=cfg.use_embedding,
+        embedding_threshold=cfg.embedding_threshold,
+        embedding_model=cfg.embedding_model,
     )
 
 

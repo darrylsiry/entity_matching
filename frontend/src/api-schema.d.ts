@@ -636,6 +636,16 @@ export interface components {
              */
             deterministic_name_floor: number;
             /**
+             * Embedding Model
+             * @default all-MiniLM-L6-v2
+             */
+            embedding_model: string;
+            /**
+             * Embedding Threshold
+             * @default 0.85
+             */
+            embedding_threshold: number;
+            /**
              * Fuzzy Threshold
              * @default 0.8
              */
@@ -661,10 +671,20 @@ export interface components {
              */
             use_deterministic: boolean;
             /**
+             * Use Embedding
+             * @default false
+             */
+            use_embedding: boolean;
+            /**
              * Use Fuzzy
              * @default true
              */
             use_fuzzy: boolean;
+            /**
+             * Use Libpostal
+             * @default true
+             */
+            use_libpostal: boolean;
             /**
              * Use Phone
              * @default true

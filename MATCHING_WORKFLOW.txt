@@ -5,7 +5,7 @@ ENTITY MATCHING — HOW THE MATCHING WORKS (plain-English reference)
 This document describes, in order, what the matching engine does, which
 open-source tools each step uses, and every parameter/threshold that is set.
 It reflects the code in backend/app/matching/ (pipeline, normalize, deterministic,
-probabilistic, fuzzy, scoring, cluster, dedupe).
+probabilistic, fuzzy, embedding, scoring, cluster, dedupe).
 
 There are TWO modes. They share the same steps; the only differences are what gets
 compared and how the final answer is shaped:
@@ -49,7 +49,8 @@ differences don't block a match.  File: normalize.py
 
 Tools: cleanco (strips legal suffixes), tldextract (domain parsing, offline/pinned
 suffix list), Unidecode (accent folding), pycountry (country resolution),
-phonenumbers (phone parsing), jellyfish (metaphone), pandas.
+phonenumbers (phone parsing), jellyfish (metaphone), postal/libpostal (address
+parsing — OPTIONAL, auto-fallback when not installed), pandas.
 
 What it does per field:
   • name:
@@ -86,7 +87,19 @@ What it does per field:
       unresolvable values pass through cleaned (signal is never dropped).
   • state: US states + Canadian provinces mapped to postal codes ("California" ->
       "ca"); other regions pass through cleaned.
-  • address / city: punctuation-stripped, whitespace-collapsed.
+  • address: punctuation-stripped, whitespace-collapsed — then one of two modes
+      (which mode is active is logged once at startup):
+      - WITH libpostal installed (optional; ~2 GB C-library, see the README): each
+        address is PARSED into components (house number, road, unit, city, state,
+        postcode). The road is run through libpostal's expansion so "Main St" ==
+        "Main Street". Two derived columns (house number, road) feed Stages 2–3.
+        If the file has NO separate city/state/postcode column mapped, those are
+        BACKFILLED from the parse (user-mapped columns are never overwritten).
+      - WITHOUT libpostal (the default install): a built-in abbreviation table is
+        applied token-wise to the whole string (St -> street, Ave -> avenue,
+        Blvd -> boulevard, Ste -> suite, Apt -> apartment, N/S/E/W -> north/...),
+        so "123 Main St Ste 4" == "123 Main Street Suite 4".
+  • city: punctuation-stripped, whitespace-collapsed.
   • postcode: alphanumerics only ("SW1A 1AA" -> "sw1a1aa").
 
 
@@ -150,7 +163,10 @@ FIELD COMPARISONS used to score a candidate pair (only fields present in the dat
                 (agreement on a rare name counts for more than on a common one)
   • domain    — exact match
   • phone     — exact match
-  • address   — Levenshtein at thresholds [2, 5] (edit distance)
+  • address   — with libpostal parses available: house number exact match + road
+                Levenshtein at thresholds [2, 5] (so a missing "Ste 4" no longer
+                reads as disagreement); otherwise the whole normalized string,
+                Levenshtein at thresholds [2, 5]
   • postcode  — exact match
   • city      — exact match, with term-frequency adjustments
 
@@ -192,7 +208,8 @@ NAME SIMILARITY METRIC (0..1):
 
 CORROBORATION / CONFLICT ADJUSTMENT (applied to the name score using other fields;
 missing fields never penalize):
-  • address: compared with token_set_ratio.
+  • address: compared with token_set_ratio — on "house number + road" when libpostal
+    parsed them (unit/suite noise ignored), else on the whole normalized string.
       - similar   (>= 0.70):  +0.05   (agreement raises confidence)
       - conflicting (< 0.45): -0.18   (clearly different address pushes a name-only
                                        coincidence DOWN, into the review band instead
@@ -212,6 +229,41 @@ EMIT:
     score is >= fuzzy_threshold (default 0.80).
   • Dedupe mode: emit every within-file pair >= fuzzy_threshold (so multi-row
     duplicate groups link up fully).
+
+
+--------------------------------------------------------------------------------
+STAGE 3.5 — SEMANTIC / EMBEDDINGS (optional, OFF by default)
+--------------------------------------------------------------------------------
+Catches matches no string metric can see: "IBM" vs "International Business
+Machines", "VW" vs "Volkswagen" — acronyms, expansions, trade vs legal names.
+File: embedding.py   Tools: sentence-transformers (model all-MiniLM-L6-v2, runs
+locally on CPU — no API calls), hnswlib for approximate search above ~20k rows
+(exact numpy search below that). Both dependencies are optional: if the stage is
+enabled but they aren't installed, it logs a warning and is skipped.
+
+Runs ONLY on residuals — records that appear in NO pair from any earlier stage —
+so it can only add candidates nothing else found.
+
+HOW: each residual record becomes the text "name, city, country" (empty parts
+skipped) and is embedded into a vector; records whose vectors are close in meaning
+get high cosine similarity even when the spellings share nothing.
+  • Link mode: file B residuals are indexed; each A residual queries its top 5
+    nearest neighbors; pairs with cosine >= embedding_threshold (0.85) become
+    candidates, best-per-A kept.
+  • Dedupe mode: all residual rows are indexed; every within-file pair above the
+    threshold is emitted.
+
+GUARDRAILS (embeddings also consider same-industry names "similar", e.g. two
+different airlines — so this stage is deliberately distrusted):
+  • The fuzzy stage's corroboration adjustments apply first (address +-0.05/-0.18,
+    city/postcode/state/country +0.03), recorded as provenance.
+  • A pair with NO exact city or postcode agreement is CAPPED at 0.89 — just below
+    the default 0.90 match threshold — so on its own it can only ever land in the
+    REVIEW queue, never auto-match. A human (or LLM adjudicator) decides.
+  • Exact city or postcode agreement lifts the cap (score = adjusted cosine).
+
+  Parameters:  use_embedding = false, embedding_threshold = 0.85,
+               embedding_model = "all-MiniLM-L6-v2", top-k = 5, review cap = 0.89
 
 
 --------------------------------------------------------------------------------
@@ -295,6 +347,12 @@ Set on the "Configure" step (SessionConfig) — user-adjustable per run:
   deterministic_demoted_score= 0.80      demoted pairs land here (review band)
   stage_thresholds           = null      optional per-stage match/review overrides
   registration_id_type_a/_b  = unknown   declared id type per file (session-level)
+  use_libpostal              = true      structured address parsing (auto-falls back
+                                         to abbreviation expansion if not installed)
+  use_embedding              = false     semantic Stage 3.5 on residuals (needs
+                                         sentence-transformers installed)
+  embedding_threshold        = 0.85      min cosine similarity for a candidate
+  embedding_model            = "all-MiniLM-L6-v2"   local sentence-transformer
 
 Fixed in code (not exposed in the UI):
   Deterministic score                = 0.99
@@ -303,6 +361,8 @@ Fixed in code (not exposed in the UI):
   Phone guard                        = drop if invalid, < 7 digits, placeholder ranges
   Generic-domain blocklist           = free email / social / site-builders (dropped)
   Name abbreviation table            = intl/natl/mfg/svcs/grp/tech/... expanded
+  Address abbreviation table         = st/ave/rd/blvd/ste/apt/n/s/e/w/... expanded
+                                       (the no-libpostal fallback)
   Fuzzy blocking keys                = first 4 chars + metaphone code of each name word
   Fuzzy name metric                  = min(token_sort_ratio, token_set_ratio)
   Fuzzy address agree / conflict     = +0.05 (sim >= 0.70) / -0.18 (sim < 0.45)
@@ -310,10 +370,13 @@ Fixed in code (not exposed in the UI):
   Splink blocking keys               = name tokens, postcode, domain, phone,
                                        first-token metaphone (empties excluded)
   Splink name comparison             = Jaro-Winkler thresholds [0.9, 0.8] (+TF)
-  Splink address comparison          = Levenshtein thresholds [2, 5]
+  Splink address comparison          = Levenshtein thresholds [2, 5] (on the parsed
+                                       road + exact house number when available)
   Splink domain/phone/postcode       = exact match; city exact (+TF)
   Splink u-training sample size      = 1,000,000 random pairs
   Splink probability-two-match recall= 0.7
+  Embedding review cap               = 0.89 (lifted only on exact city/postcode
+                                       agreement); top-k neighbors = 5
   Upload limits                      = 100 MB / 500,000 rows per file
 
 
@@ -327,6 +390,12 @@ TOOLS AT A GLANCE
   pycountry     resolve country names/codes to ISO 3166-1 alpha-2
   phonenumbers  parse/validate phone numbers to E.164
   jellyfish     metaphone codes for phonetic blocking
+  postal        libpostal binding — structured address parsing (optional install;
+                falls back to a built-in abbreviation table when absent)
+  sentence-transformers  local embedding model for the semantic stage (optional;
+                stage skipped with a warning when absent)
+  hnswlib       approximate nearest-neighbor index for embeddings at scale
+                (optional; exact numpy search used below ~20k rows / when absent)
   Splink 4      probabilistic record linkage (Fellegi–Sunter), term-freq adjustments
   DuckDB        embedded columnar engine Splink runs on
   rapidfuzz     fast fuzzy string similarity (token_sort / token_set / Jaro-Winkler)

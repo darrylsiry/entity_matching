@@ -23,6 +23,8 @@ import logging
 import pandas as pd
 
 from .schema import (
+    NORM_ADDR_HOUSE_NUMBER,
+    NORM_ADDR_ROAD,
     NORM_DOMAIN,
     NORM_FIRST_METAPHONE,
     NORM_NAME_TOKENS,
@@ -192,7 +194,14 @@ def _run(
             comparisons.append(cl.ExactMatch(NORM_DOMAIN))
         if use_phone and has_signal(_PHONE):
             comparisons.append(cl.ExactMatch(_PHONE))
-        if has_signal(_ADDRESS):
+        if has_signal(NORM_ADDR_ROAD):
+            # libpostal parsed the addresses: compare structured components so
+            # "123 Main St Ste 4" vs "123 Main Street" agrees on the road instead
+            # of the whole-string edit distance reading it as disagreement.
+            if has_signal(NORM_ADDR_HOUSE_NUMBER):
+                comparisons.append(cl.ExactMatch(NORM_ADDR_HOUSE_NUMBER))
+            comparisons.append(cl.LevenshteinAtThresholds(NORM_ADDR_ROAD, [2, 5]))
+        elif has_signal(_ADDRESS):
             comparisons.append(cl.LevenshteinAtThresholds(_ADDRESS, [2, 5]))
         if has_signal(_POSTCODE):
             comparisons.append(cl.ExactMatch(_POSTCODE))

@@ -9,6 +9,7 @@ import {
   type UploadResponse,
 } from './api'
 import { autoMap, type Mapping } from './mapping'
+import { Landing } from './components/Landing'
 import { ModeStep } from './components/ModeStep'
 import { UploadStep } from './components/UploadStep'
 import { ColumnMapStep } from './components/ColumnMapStep'
@@ -97,6 +98,9 @@ function saveSession(saved: SavedSession | null) {
 // ════════════════════════════════════════════════════════════════════════
 
 export default function App() {
+  // The marketing landing shows first on a fresh visit; a shared results link
+  // (#s=<id>) skips straight to the app so the resume flow isn't buried.
+  const [showLanding, setShowLanding] = useState(() => !window.location.hash.includes('s='))
   const [mode, setMode] = useState<Mode>('link')
   const [step, setStep] = useState(0)
   const [fields, setFields] = useState<FieldSpec[]>([])
@@ -170,6 +174,10 @@ export default function App() {
     } else {
       go('Map columns')
     }
+  }
+
+  if (showLanding) {
+    return <Landing onStart={() => setShowLanding(false)} />
   }
 
   return (

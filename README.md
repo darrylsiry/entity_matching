@@ -25,10 +25,11 @@ stages consider.
 
 | Stage | Technique | Library | Signal |
 |-------|-----------|---------|--------|
-| 0 · Normalize | Strip legal suffixes, **expand abbreviations** (Intl→International), fold unicode, extract domains, canonicalize IDs/**phones (E.164)**/**countries (ISO)**/states, derive **metaphone** keys; drop weak signals (generic domains, placeholder IDs/phones) | `cleanco`, `tldextract`, `unidecode`, `pycountry`, `phonenumbers`, `jellyfish` | — |
+| 0 · Normalize | Strip legal suffixes, **expand abbreviations** (Intl→International), fold unicode, extract domains, canonicalize IDs/**phones (E.164)**/**countries (ISO)**/states, derive **metaphone** keys, **parse addresses into components** (libpostal, optional — falls back to St→Street-style expansion); drop weak signals (generic domains, placeholder IDs/phones) | `cleanco`, `tldextract`, `unidecode`, `pycountry`, `phonenumbers`, `jellyfish`, `postal`* | — |
 | 1 · Deterministic | Exact match on registration/tax ID (**type-guarded**), website domain, **phone** — domain/phone hits with conflicting names are **demoted to review**, not auto-accepted | pandas | Near-certain |
-| 2 · Probabilistic | Fellegi–Sunter linkage with **blocking** (name tokens, postcode, domain, phone, **phonetic**; empties excluded) + field comparisons with **term-frequency weighting** (rare names count for more) | **Splink** (DuckDB) | Scored 0–1 |
-| 3 · Fuzzy fallback | Length-aware name similarity `min(token_sort, token_set)` + corroboration (address/city/zip/state/country) with conflict penalty; **records which adjustments applied** | `rapidfuzz` | Scored 0–1 |
+| 2 · Probabilistic | Fellegi–Sunter linkage with **blocking** (name tokens, postcode, domain, phone, **phonetic**; empties excluded) + field comparisons with **term-frequency weighting** (rare names count for more); with libpostal, address compares as **house number (exact) + street (edit distance)** instead of the whole string | **Splink** (DuckDB) | Scored 0–1 |
+| 3 · Fuzzy fallback | Length-aware name similarity `min(token_sort, token_set)` + corroboration (address/city/zip/state/country) with conflict penalty — address corroboration uses **parsed house+street** when available; **records which adjustments applied** | `rapidfuzz` | Scored 0–1 |
+| 3.5 · Semantic (opt-in) | **Embeddings** catch what no string metric can — "IBM" ↔ "International Business Machines". Runs only on **residuals** no earlier stage touched; candidates are **capped at the review band** (never auto-match) unless city/postcode corroborates | `sentence-transformers`*, `hnswlib`* | Review-capped |
 | 4 · Resolve | Split links by confidence (≥ Match auto, Review band → human; optional **per-stage thresholds**). Two-file: **Match / Review / No-match**. One-file: confident links → **connected components → master ID**; review-band links → **possible duplicates** to confirm/dismiss | pandas | — |
 
 **Blocking** is what makes 100k×100k tractable: instead of 10¹⁰ comparisons, records are
@@ -95,6 +96,36 @@ make install
 #   cd backend && python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt
 #   cd frontend && npm install
 ```
+
+**Optional: structured address parsing (libpostal).** Addresses match noticeably
+better with [libpostal](https://github.com/openvenues/libpostal) installed — "123 Main
+St Ste 4" parses into house number + street and compares component-wise. It needs the
+C library plus a ~2 GB data download, so it is **strictly optional**: without it the
+pipeline automatically falls back to built-in abbreviation expansion (St→Street,
+Ste→Suite, …) and logs which mode is active. To enable it:
+
+```bash
+brew install libpostal                     # macOS (Linux: build from source, see the libpostal README)
+cd backend && .venv/bin/pip install postal # the Python binding (uncomment it in requirements.txt to pin)
+```
+
+No config needed — `use_libpostal` defaults to on and auto-detects the library. CI and
+the test suite exercise the fallback path.
+
+**Optional: semantic matching (embeddings).** An opt-in Stage 3.5 embeds each
+still-unmatched record with a small local model (`all-MiniLM-L6-v2`, CPU, no API
+calls) and surfaces name pairs that mean the same company but share no spelling —
+acronyms vs expansions, trade names vs legal names. Found pairs go to the **review
+queue only** (capped below the match threshold) unless city/postcode agrees. Install
+and enable:
+
+```bash
+cd backend && .venv/bin/pip install sentence-transformers   # + hnswlib for >20k residual rows
+```
+
+Then turn on `use_embedding` in the Configure step (config key; default off —
+`embedding_threshold = 0.85`, `embedding_model = "all-MiniLM-L6-v2"`). If enabled
+without the package installed, the stage logs a warning and is skipped.
 
 **Start the app** — backend + frontend together, Ctrl+C stops both:
 

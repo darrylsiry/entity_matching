@@ -14,4 +14,13 @@ Unidecode==1.3.8
 pycountry==24.6.1
 phonenumbers==8.13.52
 jellyfish==1.1.0
+# Optional: structured address parsing. Requires the libpostal C library
+# (~2 GB data download) — see README "Address parsing (optional)". Without it
+# the pipeline falls back to static abbreviation expansion automatically.
+# postal==1.1.10
+# Optional: semantic (embedding) stage — see README. Off by default
+# (use_embedding=false); if enabled without these installed, the stage logs a
+# warning and is skipped. hnswlib only matters above ~20k residual rows.
+# sentence-transformers==3.3.1
+# hnswlib==0.8.0
 pytest==8.3.4

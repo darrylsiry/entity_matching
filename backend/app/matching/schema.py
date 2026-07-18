@@ -80,3 +80,7 @@ NORM_DOMAIN = "norm_domain"        # from WEBSITE
 NORM_NAME_TOKENS = "norm_name_tokens"  # sorted token string, for blocking
 NORM_NAME_METAPHONE = "norm_name_metaphone"      # per-token metaphones, space-joined
 NORM_FIRST_METAPHONE = "norm_first_metaphone"    # first name-token metaphone (blocking)
+# Structured address components parsed from ADDRESS via libpostal (empty when
+# libpostal is not installed — downstream stages fall back to the whole string).
+NORM_ADDR_HOUSE_NUMBER = "norm_addr_house_number"
+NORM_ADDR_ROAD = "norm_addr_road"

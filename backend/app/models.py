@@ -72,6 +72,15 @@ class SessionConfig(BaseModel):
     deterministic_demoted_score: float = 0.80
     # Per-stage classification overrides, e.g. {"fuzzy": {"match": 0.92}}. Null inherits.
     stage_thresholds: dict[str, StageThresholdOverride] | None = None
+    # --- matching-improvements spec, Phase 2.1 ---
+    use_libpostal: bool = True          # auto-falls back if libpostal isn't installed
+    # --- matching-improvements spec, Phase 2.2 ---
+    # Semantic stage: catches acronym/expansion matches ("IBM" ~ "International
+    # Business Machines") on records no earlier stage resolved. Candidates are capped
+    # at the review band unless city/postcode corroborates — they never auto-match.
+    use_embedding: bool = False
+    embedding_threshold: float = 0.85   # min cosine similarity for a candidate
+    embedding_model: str = "all-MiniLM-L6-v2"
 
 
 # ══════════════════════════════════════════════════════════════════════════

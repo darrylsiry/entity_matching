@@ -17,7 +17,12 @@ import pandas as pd
 from rapidfuzz import fuzz
 
 from .normalize import name_metaphone
-from .schema import CanonicalField, norm_col
+from .schema import (
+    NORM_ADDR_HOUSE_NUMBER,
+    NORM_ADDR_ROAD,
+    CanonicalField,
+    norm_col,
+)
 
 _NAME = norm_col(CanonicalField.NAME)
 _ADDRESS = norm_col(CanonicalField.ADDRESS)
@@ -99,8 +104,8 @@ def corroborate(
     """
     delta = 0.0
     applied: list[str] = []
-    if has.get("addr"):
-        av, bv = row_a[_ADDRESS], row_b[_ADDRESS]
+    if has.get("addr") or has.get("addr_parsed"):
+        av, bv = _addr_text(row_a, has), _addr_text(row_b, has)
         if av and bv:
             s = fuzz.token_set_ratio(av, bv) / 100.0
             if s >= 0.70:
@@ -116,9 +121,18 @@ def corroborate(
     return max(0.0, min(1.0, name_score + delta)), applied
 
 
+def _addr_text(row, has: dict) -> str:
+    """Address text for the ±adjustment: parsed house number + road when libpostal
+    produced them for this row, else the whole normalized address string."""
+    if has.get("addr_parsed") and row[NORM_ADDR_ROAD]:
+        return f"{row[NORM_ADDR_HOUSE_NUMBER]} {row[NORM_ADDR_ROAD]}".strip()
+    return row[_ADDRESS] if has.get("addr") else ""
+
+
 def _availability(a: pd.DataFrame, b: pd.DataFrame) -> dict:
     return {
         "addr": _ADDRESS in a and _ADDRESS in b,
+        "addr_parsed": NORM_ADDR_ROAD in a and NORM_ADDR_ROAD in b,
         "city": _CITY in a and _CITY in b,
         "pc": _POSTCODE in a and _POSTCODE in b,
         "state": _STATE in a and _STATE in b,
