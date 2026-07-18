@@ -211,6 +211,24 @@ export async function reclassify(
   )
 }
 
+export interface HistogramBin {
+  lo: number
+  hi: number
+  counts: Record<string, number>
+}
+
+export interface ScoreHistogramResponse {
+  session_id: string
+  stages: string[]
+  bins: HistogramBin[]
+  total: number
+  thresholds: { match: number; review: number }
+}
+
+export async function getScoreHistogram(sessionId: string): Promise<ScoreHistogramResponse> {
+  return jsonOrThrow(await fetch(`/api/session/${sessionId}/score_histogram`))
+}
+
 export async function postBulkDecisions(
   sessionId: string,
   pairs: { idx_a: number; idx_b: number }[],

@@ -29,6 +29,7 @@ from ..models import (
     ReclassifyRequest,
     ReclassifyResponse,
     ResultsResponse,
+    ScoreHistogramResponse,
     StatusResponse,
     UploadResponse,
 )
@@ -295,6 +296,15 @@ def reclassify(session_id: str, req: ReclassifyRequest) -> ReclassifyResponse:
         min_stored_score=summary["min_stored_score"],
         counts=review.effective_counts(session_id),
     )
+
+
+@router.get("/session/{session_id}/score_histogram", response_model=ScoreHistogramResponse)
+def score_histogram(session_id: str) -> ScoreHistogramResponse:
+    """Binned score distribution of the stored pair pool, for threshold tuning."""
+    try:
+        return ScoreHistogramResponse(**service.score_histogram(session_id))
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "no stored pair pool for this session") from exc
 
 
 # ══════════════════════════════════════════════════════════════════════════

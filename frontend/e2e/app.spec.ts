@@ -88,13 +88,20 @@ test.describe('single-file dedupe', () => {
     // master-ID clusters render
     await expect(page.locator('.badge.master').first()).toBeVisible()
 
-    // the sample ships one borderline pair -> possible-duplicates review works
+    // borderline pairs land in possible-duplicates; confirming one removes it
+    // from the pending queue. (Since candidate floors follow the Review
+    // threshold, the sample can surface more than one borderline pair.)
     await page.getByRole('button', { name: /Possible duplicates/ }).click()
     const cand = page.locator('.pair-card').first()
     await expect(cand).toBeVisible()
+    const pending = await page.locator('.pair-card').count()
     await cand.getByRole('button', { name: /Same company/i }).click()
-    await expect(page.getByText('No possible duplicates in this view.')).toBeVisible({
-      timeout: 10_000,
-    })
+    if (pending === 1) {
+      await expect(page.getByText('No possible duplicates in this view.')).toBeVisible({
+        timeout: 10_000,
+      })
+    } else {
+      await expect(page.locator('.pair-card')).toHaveCount(pending - 1, { timeout: 10_000 })
+    }
   })
 })

@@ -34,6 +34,11 @@
   --danger-soft: rgba(194, 47, 47, 0.1);
   --muted-soft: rgba(90, 102, 120, 0.14);
   --diff: #7d5400;
+  /* categorical chart series (cascade-stage order), CVD-validated on light surface */
+  --chart-1: #2049c7;
+  --chart-2: #c05617;
+  --chart-3: #0f8a4f;
+  --chart-4: #7c3aed;
   --panel-shadow: 0 1px 2px rgba(16, 32, 46, 0.04), 0 8px 24px rgba(16, 32, 46, 0.05);
 }
 
@@ -57,6 +62,11 @@
     --danger-soft: rgba(239, 106, 90, 0.13);
     --muted-soft: rgba(139, 149, 167, 0.16);
     --diff: #e0a33e;
+    /* dark-surface categorical steps, validated separately (not a lightness flip) */
+    --chart-1: #6a8ef7;
+    --chart-2: #cf6f1d;
+    --chart-3: #2fa863;
+    --chart-4: #9678ef;
     --panel-shadow: none;
   }
 }

@@ -238,6 +238,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/session/{session_id}/score_histogram": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Score Histogram
+         * @description Binned score distribution of the stored pair pool, for threshold tuning.
+         */
+        get: operations["score_histogram_api_session__session_id__score_histogram_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/session/{session_id}/status": {
         parameters: {
             query?: never;
@@ -545,6 +565,20 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /**
+         * HistogramBin
+         * @description One score bucket [lo, hi) with per-stage pair counts.
+         */
+        HistogramBin: {
+            /** Counts */
+            counts: {
+                [key: string]: number;
+            };
+            /** Hi */
+            hi: number;
+            /** Lo */
+            lo: number;
+        };
         /** MatchPair */
         MatchPair: {
             /**
@@ -610,6 +644,21 @@ export interface components {
             pairs: components["schemas"]["MatchPair"][];
             /** Session Id */
             session_id: string;
+            /** Total */
+            total: number;
+        };
+        /**
+         * ScoreHistogramResponse
+         * @description Binned distribution of the stored pair pool, for threshold tuning UI.
+         */
+        ScoreHistogramResponse: {
+            /** Bins */
+            bins: components["schemas"]["HistogramBin"][];
+            /** Session Id */
+            session_id: string;
+            /** Stages */
+            stages: string[];
+            thresholds: components["schemas"]["ThresholdConfig"];
             /** Total */
             total: number;
         };
@@ -1149,6 +1198,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    score_histogram_api_session__session_id__score_histogram_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScoreHistogramResponse"];
                 };
             };
             /** @description Validation Error */

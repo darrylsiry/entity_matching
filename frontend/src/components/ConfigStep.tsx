@@ -26,20 +26,25 @@ interface Props {
 const STAGES = [
   {
     key: 'use_deterministic' as const,
+    stage: 'deterministic',
     title: '1 · Deterministic',
     desc: 'Exact match on registration/tax ID, then website domain. Near-certain.',
   },
   {
     key: 'use_probabilistic' as const,
+    stage: 'probabilistic',
     title: '2 · Probabilistic (Splink)',
     desc: 'Blocked Fellegi-Sunter linkage over all fields. The workhorse at scale.',
   },
   {
     key: 'use_fuzzy' as const,
+    stage: 'fuzzy',
     title: '3 · Fuzzy fallback',
     desc: 'rapidfuzz name similarity for anything the earlier stages missed.',
   },
 ]
+
+type StageOverride = { match?: number | null; review?: number | null }
 
 // ════════════════════════════════════════════════════════════════════════
 // SECTION: Step component — stage checkboxes, threshold sliders, the advanced
@@ -72,9 +77,27 @@ export function ConfigStep({
   const matchSliderId = useId()
   const reviewSliderId = useId()
 
+  // Per-stage threshold overrides (advanced; defaults-first). A stage with no
+  // entry inherits the global sliders.
+  const overrides = config.stage_thresholds ?? {}
+  const [openStage, setOpenStage] = useState<string | null>(null)
+  function setStageOverride(stage: string, o: StageOverride | null) {
+    const next: Record<string, StageOverride> = { ...(config.stage_thresholds ?? {}) }
+    if (o === null) delete next[stage]
+    else next[stage] = o
+    setConfig({ ...config, stage_thresholds: Object.keys(next).length > 0 ? next : null })
+  }
+  const badStageOverride = STAGES.find((s) => {
+    const o = overrides[s.stage]
+    if (!o) return false
+    const m = o.match ?? config.thresholds.match
+    const r = o.review ?? config.thresholds.review
+    return r > m
+  })
+
   const canEditFields = Boolean(mode === 'dedupe' && fields && upload && mapping && setMapping)
   const nameOk = mode !== 'dedupe' || Boolean(mapping?.['name'])
-  const canContinue = anyStage && nameOk && !reviewAboveMatch
+  const canContinue = anyStage && nameOk && !reviewAboveMatch && !badStageOverride
 
   return (
     <div>
@@ -96,20 +119,55 @@ export function ConfigStep({
       )}
 
       <div className="stage-list">
-        {STAGES.map((s) => (
-          <label key={s.key} className={`stage ${config[s.key] ? 'on' : ''}`}>
-            <input
-              type="checkbox"
-              checked={config[s.key]}
-              onChange={() => toggle(s.key)}
-              aria-label={s.title}
-            />
-            <div>
-              <div className="stage-title">{s.title}</div>
-              <div className="muted">{s.desc}</div>
+        {STAGES.map((s) => {
+          const override = overrides[s.stage]
+          const open = openStage === s.stage
+          return (
+            <div key={s.key} className={`stage-card ${config[s.key] ? 'on' : ''}`}>
+              <div className="stage-head">
+                <label className="stage-main">
+                  <input
+                    type="checkbox"
+                    checked={config[s.key]}
+                    onChange={() => toggle(s.key)}
+                    aria-label={s.title}
+                  />
+                  <div>
+                    <div className="stage-title">{s.title}</div>
+                    <div className="muted">{s.desc}</div>
+                  </div>
+                </label>
+                {config[s.key] && (
+                  <button
+                    className={`btn btn-ghost btn-sm stage-gear ${override ? 'overridden' : ''}`}
+                    aria-expanded={open}
+                    aria-label={`Adjust thresholds for ${s.title}`}
+                    title="Per-stage thresholds"
+                    onClick={() => setOpenStage(open ? null : s.stage)}
+                  >
+                    {override ? (
+                      <>
+                        ≥{(override.match ?? config.thresholds.match).toFixed(2)} / ≥
+                        {(override.review ?? config.thresholds.review).toFixed(2)}
+                      </>
+                    ) : (
+                      <span aria-hidden="true">⚙</span>
+                    )}
+                  </button>
+                )}
+              </div>
+              {config[s.key] && open && (
+                <StageThresholdEditor
+                  stageTitle={s.title}
+                  override={override}
+                  globalMatch={config.thresholds.match}
+                  globalReview={config.thresholds.review}
+                  onChange={(o) => setStageOverride(s.stage, o)}
+                />
+              )}
             </div>
-          </label>
-        ))}
+          )
+        })}
       </div>
 
       <div className="thresholds">
@@ -156,6 +214,12 @@ export function ConfigStep({
             Review or raise Match.
           </div>
         )}
+        {badStageOverride && (
+          <div className="error" role="alert">
+            {badStageOverride.title}: its Review override is above its Match cutoff — nothing from
+            that stage would land in the review band. Fix it in the stage&apos;s ⚙ panel.
+          </div>
+        )}
       </div>
 
       <AdvancedPanel config={config} setConfig={setConfig} />
@@ -179,6 +243,84 @@ export function ConfigStep({
           Next: run <span aria-hidden="true">→</span>
         </button>
       </div>
+    </div>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// SECTION: Per-stage threshold editor — inline strip under a stage card.
+// Defaults-first: a stage with no override inherits the global sliders; turning
+// the toggle off seeds the stage's own sliders from the current globals.
+// ════════════════════════════════════════════════════════════════════════
+
+function StageThresholdEditor({
+  stageTitle,
+  override,
+  globalMatch,
+  globalReview,
+  onChange,
+}: {
+  stageTitle: string
+  override: StageOverride | undefined
+  globalMatch: number
+  globalReview: number
+  onChange: (o: StageOverride | null) => void
+}) {
+  const useGlobalId = useId()
+  const matchId = useId()
+  const reviewId = useId()
+  const m = override?.match ?? globalMatch
+  const r = override?.review ?? globalReview
+  return (
+    <div className="stage-tweak">
+      <label className="stage-tweak-toggle" htmlFor={useGlobalId}>
+        <input
+          id={useGlobalId}
+          type="checkbox"
+          checked={!override}
+          onChange={(e) =>
+            onChange(e.target.checked ? null : { match: globalMatch, review: globalReview })
+          }
+        />
+        Use global thresholds ({globalMatch.toFixed(2)} / {globalReview.toFixed(2)})
+      </label>
+      {override && (
+        <>
+          <div className="slider-row">
+            <label htmlFor={matchId}>
+              {stageTitle.replace(/^\d+(\.\d+)? · /, '')} Match ≥ {m.toFixed(2)}
+            </label>
+            <input
+              id={matchId}
+              type="range"
+              min={0.5}
+              max={1}
+              step={0.01}
+              value={m}
+              onChange={(e) => onChange({ ...override, match: Number(e.target.value) })}
+            />
+          </div>
+          <div className="slider-row">
+            <label htmlFor={reviewId}>
+              {stageTitle.replace(/^\d+(\.\d+)? · /, '')} Review ≥ {r.toFixed(2)}
+            </label>
+            <input
+              id={reviewId}
+              type="range"
+              min={0.5}
+              max={1}
+              step={0.01}
+              value={r}
+              onChange={(e) => onChange({ ...override, review: Number(e.target.value) })}
+            />
+          </div>
+          <p className="muted small">
+            Pairs from this stage classify against these cutoffs instead of the globals. Lowering
+            its Review also lowers the stage&apos;s candidate floor, surfacing more borderline pairs
+            for review.
+          </p>
+        </>
+      )}
     </div>
   )
 }

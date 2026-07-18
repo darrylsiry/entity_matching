@@ -292,6 +292,54 @@ def reclassify(session_id: str, match_t: float, review_t: float) -> dict:
     }
 
 
+# Stage display order for the histogram — cascade order, unknown stages appended.
+_STAGE_ORDER = ["deterministic", "probabilistic", "fuzzy", "embedding"]
+
+
+def score_histogram(session_id: str, n_bins: int = 25) -> dict:
+    """Binned score distribution of the stored pair pool, split by stage.
+
+    Bins cover [0.5, 1.0] (the thresholds' slider domain); scores below 0.5 are
+    clamped into the first bin. Raises FileNotFoundError when the session has no
+    stored pool (pre-feature or dedupe sessions).
+    """
+    allpairs = storage.load_allpairs(session_id)
+    meta = storage.load_session_meta(session_id)
+    cfg_thresholds = meta["request"]["config"]["thresholds"]
+
+    lo, hi = 0.5, 1.0
+    width = (hi - lo) / n_bins
+    # Shared edge values so adjacent bins can never double-count a score that
+    # lands exactly on a boundary (per-bin arithmetic differs by float ULPs).
+    edges = [lo + i * width for i in range(n_bins + 1)]
+    stages_present = [s for s in _STAGE_ORDER if s in set(allpairs["stage"])]
+    stages_present += sorted(set(allpairs["stage"]) - set(_STAGE_ORDER))
+
+    clipped = allpairs["score"].clip(lower=lo)
+    bins: list[dict] = []
+    for i in range(n_bins):
+        # Last bin is inclusive of 1.0 so perfect scores land somewhere.
+        in_bin = (clipped >= edges[i]) & (
+            (clipped < edges[i + 1]) if i < n_bins - 1 else (clipped <= edges[i + 1])
+        )
+        sub = allpairs.loc[in_bin]
+        bins.append(
+            {
+                "lo": round(edges[i], 4),
+                "hi": round(edges[i + 1], 4),
+                "counts": {s: int((sub["stage"] == s).sum()) for s in stages_present},
+            }
+        )
+
+    return {
+        "session_id": session_id,
+        "stages": stages_present,
+        "bins": bins,
+        "total": int(len(allpairs)),
+        "thresholds": cfg_thresholds,
+    }
+
+
 def enrich_candidates(session_id: str, cand_rows: pd.DataFrame) -> list[dict]:
     """Attach the two rows' records to each possible-duplicate candidate pair."""
     raw = load_dedupe_source(session_id)

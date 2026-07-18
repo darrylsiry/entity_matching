@@ -7,6 +7,7 @@ import {
   downloadUrl,
   getEvaluation,
   getResults,
+  getScoreHistogram,
   postBulkDecisions,
   postDecision,
   reclassify,
@@ -15,7 +16,9 @@ import {
   type Evaluation,
   type MatchPair,
   type ResultsResponse,
+  type ScoreHistogramResponse,
 } from '../api'
+import { ScoreHistogram } from './ScoreHistogram'
 
 interface Props {
   sessionId: string
@@ -409,8 +412,24 @@ function ThresholdPanel({
   const [match, setMatch] = useState(0.9)
   const [review, setReview] = useState(0.75)
   const [busy, setBusy] = useState(false)
+  const [histogram, setHistogram] = useState<ScoreHistogramResponse | null>(null)
   const matchSliderId = useId()
   const reviewSliderId = useId()
+
+  // On first open, fetch the stored score distribution and seed the sliders
+  // from the session's current thresholds. 404 (dedupe / pre-feature session)
+  // just means no chart — the sliders still work.
+  useEffect(() => {
+    if (!open || histogram) return
+    getScoreHistogram(sessionId)
+      .then((h) => {
+        setHistogram(h)
+        setMatch(h.thresholds.match)
+        setReview(h.thresholds.review)
+      })
+      .catch(() => setHistogram(null))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
 
   async function apply() {
     setBusy(true)
@@ -439,6 +458,9 @@ function ThresholdPanel({
       </div>
       {open && (
         <div className="detected-body">
+          {histogram && histogram.total > 0 && (
+            <ScoreHistogram data={histogram} match={match} review={review} />
+          )}
           <div className="slider-row">
             <label htmlFor={matchSliderId}>Match ≥ {match.toFixed(2)}</label>
             <input

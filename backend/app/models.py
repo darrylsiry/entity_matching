@@ -171,6 +171,24 @@ class ReclassifyRequest(BaseModel):
     review: float = Field(ge=0.0, le=1.0)
 
 
+class HistogramBin(BaseModel):
+    """One score bucket [lo, hi) with per-stage pair counts."""
+
+    lo: float
+    hi: float
+    counts: dict[str, int]
+
+
+class ScoreHistogramResponse(BaseModel):
+    """Binned distribution of the stored pair pool, for threshold tuning UI."""
+
+    session_id: str
+    stages: list[str]        # stage names present, cascade order
+    bins: list[HistogramBin]
+    total: int
+    thresholds: ThresholdConfig  # the session's current global thresholds
+
+
 class ReclassifyResponse(BaseModel):
     session_id: str
     match: int

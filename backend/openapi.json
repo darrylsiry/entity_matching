@@ -576,6 +576,33 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "HistogramBin": {
+        "description": "One score bucket [lo, hi) with per-stage pair counts.",
+        "properties": {
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Counts",
+            "type": "object"
+          },
+          "hi": {
+            "title": "Hi",
+            "type": "number"
+          },
+          "lo": {
+            "title": "Lo",
+            "type": "number"
+          }
+        },
+        "required": [
+          "lo",
+          "hi",
+          "counts"
+        ],
+        "title": "HistogramBin",
+        "type": "object"
+      },
       "MatchPair": {
         "properties": {
           "adjustments": {
@@ -747,6 +774,45 @@
           "pairs"
         ],
         "title": "ResultsResponse",
+        "type": "object"
+      },
+      "ScoreHistogramResponse": {
+        "description": "Binned distribution of the stored pair pool, for threshold tuning UI.",
+        "properties": {
+          "bins": {
+            "items": {
+              "$ref": "#/components/schemas/HistogramBin"
+            },
+            "title": "Bins",
+            "type": "array"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "stages": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Stages",
+            "type": "array"
+          },
+          "thresholds": {
+            "$ref": "#/components/schemas/ThresholdConfig"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "session_id",
+          "stages",
+          "bins",
+          "total",
+          "thresholds"
+        ],
+        "title": "ScoreHistogramResponse",
         "type": "object"
       },
       "SessionConfig": {
@@ -1617,6 +1683,46 @@
           }
         },
         "summary": "Run Session"
+      }
+    },
+    "/api/session/{session_id}/score_histogram": {
+      "get": {
+        "description": "Binned score distribution of the stored pair pool, for threshold tuning.",
+        "operationId": "score_histogram_api_session__session_id__score_histogram_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScoreHistogramResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Score Histogram"
       }
     },
     "/api/session/{session_id}/status": {
