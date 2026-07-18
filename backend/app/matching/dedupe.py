@@ -103,7 +103,7 @@ def run_dedupe(
         if len(sub) >= 2:
             prob = probabilistic.match_probabilistic_within(
                 sub,
-                threshold=config.probabilistic_threshold,
+                threshold=config.candidate_floor("probabilistic", config.probabilistic_threshold),
                 use_phone=config.use_phone,
                 phonetic_blocking=config.use_phonetic_blocking,
                 tf_adjustments=config.splink_tf_adjustments,
@@ -117,7 +117,7 @@ def run_dedupe(
         progress("Fuzzy fallback (rapidfuzz)", 0.75)
         fz = fuzzy.match_fuzzy_within(
             norm,
-            threshold=config.fuzzy_threshold,
+            threshold=config.candidate_floor("fuzzy", config.fuzzy_threshold),
             exclude=resolved,
             phonetic=config.use_phonetic_blocking,
         )

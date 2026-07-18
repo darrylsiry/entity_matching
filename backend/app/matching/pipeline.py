@@ -77,6 +77,25 @@ class MatchConfig:
     embedding_threshold: float = 0.85
     embedding_model: str = embedding.DEFAULT_MODEL
 
+    def effective_review(self, stage: str) -> float:
+        """The review cutoff that will classify this stage's pairs (per-stage
+        override when set, else the global)."""
+        review = self.thresholds.review
+        if self.stage_thresholds and stage in self.stage_thresholds:
+            _match_over, review_over = self.stage_thresholds[stage]
+            if review_over is not None:
+                review = review_over
+        return review
+
+    def candidate_floor(self, stage: str, base: float) -> float:
+        """Candidate-generation floor for a scoring stage.
+
+        Never above the review band that will classify the stage's pairs —
+        otherwise lowering the Review slider below `base` silently surfaces
+        nothing, because the stage discarded those candidates at generation.
+        """
+        return min(base, self.effective_review(stage))
+
 
 @dataclass
 class MatchResult:
@@ -168,7 +187,7 @@ def run_pipeline(
             prob = probabilistic.match_probabilistic(
                 sub_a,
                 sub_b,
-                threshold=config.probabilistic_threshold,
+                threshold=config.candidate_floor("probabilistic", config.probabilistic_threshold),
                 use_phone=config.use_phone,
                 phonetic_blocking=config.use_phonetic_blocking,
                 tf_adjustments=config.splink_tf_adjustments,
@@ -186,7 +205,7 @@ def run_pipeline(
         fz = fuzzy.match_fuzzy(
             norm_a,
             norm_b,
-            threshold=config.fuzzy_threshold,
+            threshold=config.candidate_floor("fuzzy", config.fuzzy_threshold),
             exclude_a=resolved_a,
             exclude_b=resolved_b,
             phonetic=config.use_phonetic_blocking,

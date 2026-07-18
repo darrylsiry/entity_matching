@@ -113,7 +113,14 @@ export function ConfigStep({
       </div>
 
       <div className="thresholds">
-        <h3>Classification thresholds</h3>
+        <h3>Classification thresholds — applied to every stage&apos;s final score</h3>
+        <p className="muted small">
+          Each stage scores its candidate pairs from 0 to 1; at the end of the run, every
+          pair&apos;s score — whichever stage produced it — is classified against these two cutoffs.
+          Exact ID and website/phone hits from the deterministic stage score 0.99–1.0, so they
+          auto-match at any normal setting; the sliders mostly carve up the probabilistic and fuzzy
+          scores.
+        </p>
         <div className="slider-row">
           <label htmlFor={matchSliderId}>Match ≥ {config.thresholds.match.toFixed(2)}</label>
           <input

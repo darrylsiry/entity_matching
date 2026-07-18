@@ -226,9 +226,15 @@ missing fields never penalize):
 
 EMIT:
   • Link mode: for each A record, keep only its single BEST B match whose adjusted
-    score is >= fuzzy_threshold (default 0.80).
-  • Dedupe mode: emit every within-file pair >= fuzzy_threshold (so multi-row
+    score is >= the stage's candidate floor.
+  • Dedupe mode: emit every within-file pair >= the candidate floor (so multi-row
     duplicate groups link up fully).
+  • Candidate floor = min(fuzzy_threshold [default 0.80], the review threshold that
+    will classify this stage's pairs). The same rule applies to the probabilistic
+    stage's floor (default 0.75). This keeps the Review slider honest: lowering
+    Review below a stage's default floor actually surfaces more borderline
+    candidates instead of silently doing nothing (the stage would otherwise have
+    discarded them at generation time).
 
 
 --------------------------------------------------------------------------------

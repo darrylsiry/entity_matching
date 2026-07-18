@@ -435,6 +435,52 @@ def test_fuzzy_matches_similar_names():
     assert pairs.iloc[0]["score"] >= 0.8
 
 
+def test_candidate_floor_follows_review_threshold():
+    """Lowering the Review slider must lower the stages' candidate-generation
+    floors, so review-band pairs below the stage defaults actually surface."""
+    cfg = MatchConfig(thresholds=Thresholds(match=0.9, review=0.6))
+    assert cfg.candidate_floor("fuzzy", 0.80) == 0.6
+    assert cfg.candidate_floor("probabilistic", 0.75) == 0.6
+
+    # Review above the stage default: the stage default stays (floor never rises).
+    cfg_hi = MatchConfig(thresholds=Thresholds(match=0.95, review=0.9))
+    assert cfg_hi.candidate_floor("fuzzy", 0.80) == 0.80
+
+    # A per-stage review override beats the global for that stage only.
+    cfg_stage = MatchConfig(
+        thresholds=Thresholds(match=0.9, review=0.75),
+        stage_thresholds={"fuzzy": (None, 0.55)},
+    )
+    assert cfg_stage.candidate_floor("fuzzy", 0.80) == 0.55
+    assert cfg_stage.candidate_floor("probabilistic", 0.75) == 0.75
+
+
+def test_pipeline_passes_lowered_floor_to_fuzzy(monkeypatch):
+    """End-to-end wiring: run_pipeline hands the effective (lowered) floor to
+    the fuzzy stage instead of the raw config default."""
+    from app.matching import pipeline as pipeline_mod
+
+    seen: dict[str, float] = {}
+    orig = fuzzy.match_fuzzy
+
+    def spy(*args, **kwargs):
+        seen["threshold"] = kwargs["threshold"]
+        return orig(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline_mod.fuzzy, "match_fuzzy", spy)
+
+    mapping = {CanonicalField.NAME: "name"}
+    a = _frame([{"name": "Acme Global Holdings"}], mapping)
+    b = _frame([{"name": "Totally Different Ltd"}], mapping)
+    cfg = MatchConfig(
+        use_deterministic=False,
+        use_probabilistic=False,
+        thresholds=Thresholds(match=0.9, review=0.6),
+    )
+    run_pipeline(a, b, mapping, mapping, cfg)
+    assert seen["threshold"] == 0.6
+
+
 # ---- scoring ---------------------------------------------------------------
 
 def test_classification_bands():
