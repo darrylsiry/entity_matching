@@ -17,3 +17,8 @@ sample_data/file_b.csv
 
 # OS
 .DS_Store
+
+# Local-only files — never committed, never in clones.
+# Drop anything private into local/ (or match it explicitly below).
+local/
+sample 1.xlsx
