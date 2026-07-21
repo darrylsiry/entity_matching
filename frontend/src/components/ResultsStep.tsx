@@ -180,7 +180,9 @@ export function ResultsStep({ sessionId, onReset }: Props) {
       <div className="results-head">
         <h2>Results</h2>
         <div className="head-right">
-          {evalu?.available && (
+          {/* Accuracy panel appears only for ground truth the user explicitly
+              uploaded — the repo's bundled dev file no longer surfaces here. */}
+          {evalu?.available && evalu.gt_source === 'uploaded' && (
             <EvalBox
               e={evalu}
               onApplySuggestion={
